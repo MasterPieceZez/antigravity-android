@@ -109,7 +109,7 @@ jobs:
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Antigravity-v1.0.1-APKs
+          name: Antigravity-${TAG}-APKs
           path: dist/*
 
       - name: Publish GitHub Release
@@ -119,8 +119,8 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           cd dist
-          cat > release_notes.md <<'EOF'
-          ## Antigravity for Android — v1.0.1
+          cat > release_notes.md <<EOF
+          ## Antigravity for Android — ${TAG}
 
           Self-contained multi-architecture Android client for Google Antigravity (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`, and `universal`) with an embedded Linux runtime, **Native Jetpack Compose ACP UI** (`agy acp`), Web Hub (`agy --hub`), native microphone support for speech-to-text, agent job-completion notifications, and 1-tap offline `.tar.zst` backup & Termux library migration.
 
@@ -128,8 +128,8 @@ jobs:
           - **Native Jetpack Compose ACP UI:** Launch directly from the Control Center (`Open Native ACP UI (Compose)`) to interact with `agy acp` over stdio JSON-RPC 2.0 with streaming Markdown, syntax-highlighted code blocks, unified diffs, collapsible reasoning/tool-call cards, interactive permission approvals, session switching, and native Android speech-to-text.
 
           ### Which APK should I download?
-          - **`AntigravityStandalone-v1.0.1-<arch>.apk`** — Recommended for first-time / fresh installs. Pick your device architecture (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`) or **`AntigravityStandalone-v1.0.1-universal.apk`** if you aren't sure.
-          - **`AntigravityUpdate-v1.0.1-universal-lite.apk`** — Lightweight universal in-place updater APK for existing installs where `/data/data/com.termux/files/usr` is already installed.
+          - **`AntigravityStandalone-${TAG}-<arch>.apk`** — Recommended for first-time / fresh installs. Pick your device architecture (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`) or **`AntigravityStandalone-${TAG}-universal.apk`** if you aren't sure.
+          - **`AntigravityUpdate-${TAG}-universal-lite.apk`** — Lightweight universal in-place updater APK for existing installs where `/data/data/com.termux/files/usr` is already installed.
 
           ### SHA-256 Checksums
           ```
