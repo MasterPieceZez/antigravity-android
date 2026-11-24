@@ -102,6 +102,25 @@ import androidx.core.app.NotificationCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.termux.R
+import java.io.File
+import com.termux.app.AntigravityMainActivity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.AnimatedVisibility
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -165,7 +184,14 @@ class AcpNativeActivity : ComponentActivity() {
             MaterialTheme(colorScheme = AgyColorScheme) {
                 AcpNativeScreen(
                     controller = controller,
-                    onBackToWebHub = { finish() }
+                    onBackToWebHub = {
+                    val i = Intent(this@AcpNativeActivity, AntigravityMainActivity::class.java).apply {
+                        putExtra(AntigravityMainActivity.EXTRA_FORCE_WEB_HUB, true)
+                        addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                    startActivity(i)
+                    finish()
+                }
                 )
             }
         }
@@ -319,38 +345,73 @@ private fun AcpNativeScreen(
                     .navigationBarsPadding()
                     .imePadding()
             ) {
-                LazyColumn(
-                    state = listState,
+                var showQuickPrompts by remember { mutableStateOf(false) }
+
+                Box(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .fillMaxWidth()
                 ) {
-                    items(state.timeline, key = { it.id }) { item ->
-                        TimelineItemRow(item)
+                    if (state.timeline.isEmpty()) {
+                        AcpHubEmptyHero(
+                            connectionState = state.connectionState,
+                            statusMessage = state.statusMessage
+                        )
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(state.timeline, key = { it.id }) { item ->
+                                Box(
+                                    modifier = Modifier.animateContentSize(
+                                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+                                    )
+                                ) {
+                                    TimelineItemRow(item)
+                                }
+                            }
+                        }
                     }
                 }
 
-                state.pendingPermission?.let { permission ->
-                    PermissionCard(
-                        request = permission,
-                        onSelectOption = { optionId -> controller.respondToPermission(optionId) }
+                AnimatedVisibility(
+                    visible = state.pendingPermission != null,
+                    enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { it / 2 }) + fadeOut()
+                ) {
+                    state.pendingPermission?.let { permission ->
+                        PermissionCard(
+                            request = permission,
+                            onSelectOption = { optionId -> controller.respondToPermission(optionId) }
+                        )
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = showQuickPrompts,
+                    enter = fadeIn(tween(180)) + slideInVertically { it / 3 },
+                    exit = fadeOut(tween(150)) + slideOutVertically { it / 3 }
+                ) {
+                    QuickPromptRow(
+                        enabled = state.connectionState == AcpConnectionState.READY,
+                        onSelectPrompt = { prompt ->
+                            showQuickPrompts = false
+                            controller.sendPrompt(prompt)
+                        }
                     )
                 }
-
-                QuickPromptRow(
-                    enabled = state.connectionState == AcpConnectionState.READY,
-                    onSelectPrompt = { prompt ->
-                        controller.sendPrompt(prompt)
-                    }
-                )
 
                 ComposerBar(
                     text = inputText,
                     onTextChange = { inputText = it },
                     isConnected = state.connectionState == AcpConnectionState.READY,
                     isTurnRunning = state.isTurnRunning,
+                    workingDirLabel = File(state.workingDir).name.ifBlank { "home" },
+                    onToggleQuickPrompts = { showQuickPrompts = !showQuickPrompts },
+                    onEditWorkingDir = { showCwdDialog = true },
                     onMicClick = {
                         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                             putExtra(
@@ -633,6 +694,32 @@ private fun AcpDrawerContent(
             }
 
             Spacer(modifier = Modifier.height(8.dp))
+
+
+        val prefs = LocalContext.current.getSharedPreferences("antigravity_prefs", Context.MODE_PRIVATE)
+        var defaultAcp by remember { mutableStateOf(prefs.getString(AntigravityMainActivity.KEY_DEFAULT_UI, "acp") == "acp") }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "Default UI: Native ACP",
+                color = AgyTextPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Switch(
+                checked = defaultAcp,
+                onCheckedChange = { checked ->
+                    defaultAcp = checked
+                    prefs.edit().putString(AntigravityMainActivity.KEY_DEFAULT_UI, if (checked) "acp" else "web").apply()
+                },
+                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AgyAccent)
+            )
+        }
 
             OutlinedButton(
                 onClick = onSwitchToWebHub,
@@ -982,55 +1069,159 @@ private fun QuickPromptRow(
 }
 
 @Composable
+private fun AcpHubEmptyHero(
+    connectionState: AcpConnectionState,
+    statusMessage: String
+) {
+    val pulse = rememberInfiniteTransition(label = "heroPulse")
+    val logoAlpha by pulse.animateFloat(
+        initialValue = 0.34f,
+        targetValue = 0.56f,
+        animationSpec = infiniteRepeatable(tween(2400), RepeatMode.Reverse),
+        label = "logoAlpha"
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            painter = painterResource(id = R.drawable.ic_antigravity_notif),
+            contentDescription = "Antigravity",
+            tint = Color(0xFF8B949E).copy(alpha = logoAlpha),
+            modifier = Modifier.size(62.dp)
+        )
+        Spacer(modifier = Modifier.height(18.dp))
+        Text(
+            text = "What are we working on today?",
+            color = Color(0xFFCBD5E1),
+            fontSize = 19.sp,
+            fontWeight = FontWeight.Medium
+        )
+        if (connectionState != AcpConnectionState.READY) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = statusMessage,
+                color = AgyTextSecondary,
+                fontSize = 12.sp
+            )
+        }
+    }
+}
+
+@Composable
 private fun ComposerBar(
     text: String,
     onTextChange: (String) -> Unit,
     isConnected: Boolean,
     isTurnRunning: Boolean,
+    workingDirLabel: String,
+    onToggleQuickPrompts: () -> Unit,
+    onEditWorkingDir: () -> Unit,
     onMicClick: () -> Unit,
     onSend: () -> Unit,
     onCancel: () -> Unit
 ) {
-    Surface(color = AgySurface, tonalElevation = 0.dp) {
-        Column {
-            HorizontalDivider(color = AgyBorder, thickness = 1.dp)
+    val canSend = isConnected && text.isNotBlank()
+    val sendBg by animateColorAsState(
+        targetValue = if (canSend) Color(0xFFE6EAF0) else AgyElevated,
+        animationSpec = tween(160),
+        label = "sendBg"
+    )
+    val sendTint by animateColorAsState(
+        targetValue = if (canSend) Color(0xFF0B0D10) else AgyTextSecondary,
+        animationSpec = tween(160),
+        label = "sendTint"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AgyBg)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(AgySurface)
+                .border(1.dp, AgyBorder, RoundedCornerShape(24.dp))
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = onTextChange,
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = {
+                    Text(
+                        text = if (isTurnRunning) "Steer active turn..." else "Ask anything, @ to mention, / for actions",
+                        color = AgyTextSecondary,
+                        fontSize = 15.sp
+                    )
+                },
+                maxLines = 6,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = AgyTextPrimary,
+                    unfocusedTextColor = AgyTextPrimary,
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedBorderColor = Color.Transparent,
+                    unfocusedBorderColor = Color.Transparent,
+                    cursorColor = AgyAccent
+                )
+            )
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.Bottom
+                    .padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onMicClick) {
-                    Icon(
-                        Icons.Rounded.Mic,
-                        contentDescription = "Voice Input",
-                        tint = AgyTextSecondary
+                IconButton(
+                    onClick = onToggleQuickPrompts,
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Text(
+                        text = "+",
+                        color = AgyTextSecondary,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Light
                     )
                 }
 
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = onTextChange,
-                    modifier = Modifier.weight(1f),
-                    placeholder = {
-                        Text(
-                            text = if (isTurnRunning) "Steer active turn..." else "Message Antigravity...",
-                            color = AgyTextSecondary,
-                            fontSize = 14.sp
-                        )
-                    },
-                    maxLines = 5,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = AgyTextPrimary,
-                        unfocusedTextColor = AgyTextPrimary,
-                        focusedContainerColor = AgyBg,
-                        unfocusedContainerColor = AgyBg,
-                        focusedBorderColor = AgyAccent,
-                        unfocusedBorderColor = AgyBorder,
-                        cursorColor = AgyAccent
+                Spacer(modifier = Modifier.width(6.dp))
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(AgyBg)
+                        .border(1.dp, AgyBorder, RoundedCornerShape(10.dp))
+                        .clickable(onClick = onEditWorkingDir)
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        text = workingDirLabel,
+                        color = AgyTextSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
                     )
-                )
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                IconButton(
+                    onClick = onMicClick,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        Icons.Rounded.Mic,
+                        contentDescription = "Voice Input",
+                        tint = AgyTextSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
 
                 Spacer(modifier = Modifier.width(6.dp))
 
@@ -1038,32 +1229,33 @@ private fun ComposerBar(
                     IconButton(
                         onClick = onCancel,
                         modifier = Modifier
-                            .size(44.dp)
+                            .size(38.dp)
                             .clip(CircleShape)
                             .background(AgyDanger)
                     ) {
                         Icon(
                             Icons.Rounded.Stop,
                             contentDescription = "Stop Turn",
-                            tint = Color.White
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                 }
 
-                val canSend = isConnected && text.isNotBlank()
                 IconButton(
                     onClick = onSend,
                     enabled = canSend,
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(38.dp)
                         .clip(CircleShape)
-                        .background(if (canSend) AgyAccent else AgyElevated)
+                        .background(sendBg)
                 ) {
                     Icon(
                         Icons.AutoMirrored.Rounded.Send,
                         contentDescription = if (isTurnRunning) "Steer" else "Send",
-                        tint = if (canSend) Color.White else AgyTextSecondary
+                        tint = sendTint,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }

@@ -77,6 +77,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         private const val PREFS_NAME = "antigravity_prefs"
         private const val KEY_NOTIFY_DONE = "notify_agent_done"
         private const val KEY_NOTIFY_FOREGROUND = "notify_when_foreground"
+        const val KEY_DEFAULT_UI = "default_ui"
+        const val EXTRA_FORCE_WEB_HUB = "force_web_hub"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         private const val KEY_CPU_WAKELOCK = "cpu_wakelock"
         private const val KEY_PILL_X_FRAC = "pill_x_frac"
@@ -216,6 +218,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIncomingShareIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_FORCE_WEB_HUB, false) && bootstrapComplete && AntigravityEngine.isAgyInstalled()) {
+            bootAntigravityHub()
+        }
     }
 
     private fun handleIncomingShareIntent(intent: Intent?) {
@@ -1051,6 +1056,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private fun proceedAfterSetup() {
         setupContainer.visibility = View.GONE
         if (AntigravityEngine.isAgyInstalled()) {
+            val forceWeb = intent?.getBooleanExtra(EXTRA_FORCE_WEB_HUB, false) == true
+            val defaultUi = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(KEY_DEFAULT_UI, "acp")
+            if (!forceWeb && defaultUi == "acp") {
+                startActivity(Intent(this, com.termux.app.acp.AcpNativeActivity::class.java))
+                return
+            }
             bootAntigravityHub()
         } else {
             showOnboardingScreen()
@@ -1192,6 +1203,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         val txtEngine = view.findViewById<TextView>(R.id.txt_status_engine)
         val dotHub = view.findViewById<View>(R.id.dot_hub)
         val txtHub = view.findViewById<TextView>(R.id.txt_status_hub)
+
+        val switchDefaultAcp = view.findViewById<Switch>(R.id.switch_default_acp)
+        switchDefaultAcp.isChecked = prefs.getString(KEY_DEFAULT_UI, "acp") == "acp"
+        switchDefaultAcp.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putString(KEY_DEFAULT_UI, if (checked) "acp" else "web").apply()
+        }
 
         val switchScreenOn = view.findViewById<Switch>(R.id.switch_keep_screen_on)
         val switchCpuWake = view.findViewById<Switch>(R.id.switch_cpu_wakelock)

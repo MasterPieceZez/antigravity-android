@@ -1,6 +1,6 @@
 # Antigravity for Android
 
-[![Release](https://img.shields.io/github/v/release/MasterPieceZez/antigravity-android?color=3B82F6&label=release&v=1.0.1)](https://github.com/MasterPieceZez/antigravity-android/releases) [![Build](https://img.shields.io/github/actions/workflows/build-release.yml/badge.svg?branch=main&v=1.0.1)](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml) ![ABI](https://img.shields.io/badge/ABI-universal%20%7C%20arm64--v8a%20%7C%20armeabi--v7a%20%7C%20x86__64%20%7C%20x86-14171D) ![License](https://img.shields.io/badge/license-GPL--3.0-22C55E)
+[![Release](https://img.shields.io/github/v/release/MasterPieceZez/antigravity-android?color=3B82F6&label=release&v=1.0.2)](https://github.com/MasterPieceZez/antigravity-android/releases) [![Build](https://img.shields.io/github/actions/workflows/build-release.yml/badge.svg?branch=main&v=1.0.2)](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml) ![ABI](https://img.shields.io/badge/ABI-universal%20%7C%20arm64--v8a%20%7C%20armeabi--v7a%20%7C%20x86__64%20%7C%20x86-14171D) ![License](https://img.shields.io/badge/license-GPL--3.0-22C55E)
 
 An unofficial, standalone Android client for Google Antigravity (`agy`). It bundles the Termux Linux bootstrap inside the APK so `agy` runs locally on-device without needing a separate Termux install or `proot`.
 
