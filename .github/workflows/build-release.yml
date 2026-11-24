@@ -124,7 +124,7 @@ jobs:
 
           Self-contained multi-architecture Android client for Google Antigravity (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`, and `universal`) with an embedded Linux runtime, **Native Jetpack Compose ACP UI** (`agy acp`), Web Hub (`agy --hub`), native microphone support for speech-to-text, agent job-completion notifications, and 1-tap offline `.tar.zst` backup & Termux library migration.
 
-          ### What's New in v1.0.1
+          ### Highlights (${TAG})
           - **Native Jetpack Compose ACP UI:** Launch directly from the Control Center (`Open Native ACP UI (Compose)`) to interact with `agy acp` over stdio JSON-RPC 2.0 with streaming Markdown, syntax-highlighted code blocks, unified diffs, collapsible reasoning/tool-call cards, interactive permission approvals, session switching, and native Android speech-to-text.
 
           ### Which APK should I download?
