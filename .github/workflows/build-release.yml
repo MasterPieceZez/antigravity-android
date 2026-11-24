@@ -54,20 +54,29 @@ jobs:
           build_zstd "x86_64" "$NDK_BIN/x86_64-linux-android24-clang"
           build_zstd "x86" "$NDK_BIN/i686-linux-android24-clang"
 
-      - name: Decode Release Keystore (if configured)
+      - name: Decode or Generate CI Release Keystore
         env:
           AGY_KEYSTORE_BASE64: ${{ secrets.AGY_KEYSTORE_BASE64 }}
         run: |
           if [ -n "$AGY_KEYSTORE_BASE64" ]; then
             echo "$AGY_KEYSTORE_BASE64" | base64 -d > /tmp/release.jks
             echo "AGY_KEYSTORE_PATH=/tmp/release.jks" >> "$GITHUB_ENV"
+          elif [ ! -f app/testkey_untrusted.jks ]; then
+            keytool -genkeypair -v -keystore /tmp/ci-release.jks -storetype JKS \
+              -keyalg RSA -keysize 2048 -validity 10000 -alias antigravity \
+              -storepass antigravity-ci -keypass antigravity-ci \
+              -dname "CN=Antigravity Android, O=OpenSource, C=US"
+            echo "AGY_KEYSTORE_PATH=/tmp/ci-release.jks" >> "$GITHUB_ENV"
+            echo "CI_KEYSTORE_PASSWORD=antigravity-ci" >> "$GITHUB_ENV"
+            echo "CI_KEY_ALIAS=antigravity" >> "$GITHUB_ENV"
+            echo "CI_KEY_PASSWORD=antigravity-ci" >> "$GITHUB_ENV"
           fi
 
       - name: Build Standalone Multi-Arch & Universal Release APKs
         env:
-          AGY_KEYSTORE_PASSWORD: ${{ secrets.AGY_KEYSTORE_PASSWORD }}
-          AGY_KEY_ALIAS: ${{ secrets.AGY_KEY_ALIAS }}
-          AGY_KEY_PASSWORD: ${{ secrets.AGY_KEY_PASSWORD }}
+          AGY_KEYSTORE_PASSWORD: ${{ secrets.AGY_KEYSTORE_PASSWORD || env.CI_KEYSTORE_PASSWORD }}
+          AGY_KEY_ALIAS: ${{ secrets.AGY_KEY_ALIAS || env.CI_KEY_ALIAS }}
+          AGY_KEY_PASSWORD: ${{ secrets.AGY_KEY_PASSWORD || env.CI_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleRelease --no-daemon
@@ -76,9 +85,9 @@ jobs:
 
       - name: Build Lite Update Universal APK
         env:
-          AGY_KEYSTORE_PASSWORD: ${{ secrets.AGY_KEYSTORE_PASSWORD }}
-          AGY_KEY_ALIAS: ${{ secrets.AGY_KEY_ALIAS }}
-          AGY_KEY_PASSWORD: ${{ secrets.AGY_KEY_PASSWORD }}
+          AGY_KEYSTORE_PASSWORD: ${{ secrets.AGY_KEYSTORE_PASSWORD || env.CI_KEYSTORE_PASSWORD }}
+          AGY_KEY_ALIAS: ${{ secrets.AGY_KEY_ALIAS || env.CI_KEY_ALIAS }}
+          AGY_KEY_PASSWORD: ${{ secrets.AGY_KEY_PASSWORD || env.CI_KEY_PASSWORD }}
         run: |
           ./gradlew :app:externalNativeBuildCleanRelease --no-daemon || true
           touch app/src/main/cpp/termux-bootstrap-zip.S
