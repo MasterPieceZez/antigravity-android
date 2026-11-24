@@ -7,8 +7,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  build-arm64:
+  build-apks:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -25,30 +28,42 @@ jobs:
         with:
           packages: 'platforms;android-36 build-tools;36.0.0 ndk;29.0.14206865'
 
-      - name: Cross-compile arm64-v8a libzstd_cli.so
+      - name: Cross-compile libzstd_cli.so for all Android ABIs
         run: |
           NDK_BIN="$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          CC="$NDK_BIN/aarch64-linux-android28-clang"
           STRIP="$NDK_BIN/llvm-strip"
           curl -fsSL -o /tmp/zstd.tar.gz "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz"
           tar -xzf /tmp/zstd.tar.gz -C /tmp
           cd /tmp/zstd-1.5.7
-          "$CC" -O2 -fPIE -pie -pthread -DZSTD_MULTITHREAD -DZSTD_NOBENCH -DZSTD_NODICT \
-            -Ilib -Ilib/common -Ilib/compress -Ilib/decompress -Iprograms \
-            lib/common/*.c lib/compress/*.c lib/decompress/*.c \
-            programs/zstdcli.c programs/zstdcli_trace.c programs/util.c programs/timefn.c programs/fileio.c programs/fileio_asyncio.c \
-            -o /tmp/libzstd_cli.so
-          "$STRIP" /tmp/libzstd_cli.so
-          mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a"
-          cp /tmp/libzstd_cli.so "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libzstd_cli.so"
+
+          build_zstd() {
+            local abi="$1"
+            local cc="$2"
+            "$cc" -O2 -fPIE -pie -pthread -DZSTD_MULTITHREAD -DZSTD_NOBENCH -DZSTD_NODICT \
+              -Ilib -Ilib/common -Ilib/compress -Ilib/decompress -Iprograms \
+              lib/common/*.c lib/compress/*.c lib/decompress/*.c \
+              programs/zstdcli.c programs/zstdcli_trace.c programs/util.c programs/timefn.c programs/fileio.c programs/fileio_asyncio.c \
+              -o "/tmp/libzstd_cli_${abi}.so"
+            "$STRIP" "/tmp/libzstd_cli_${abi}.so"
+            mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/${abi}"
+            cp "/tmp/libzstd_cli_${abi}.so" "$GITHUB_WORKSPACE/app/src/main/jniLibs/${abi}/libzstd_cli.so"
+          }
+
+          build_zstd "arm64-v8a" "$NDK_BIN/aarch64-linux-android21-clang"
+          build_zstd "armeabi-v7a" "$NDK_BIN/armv7a-linux-androideabi21-clang"
+          build_zstd "x86_64" "$NDK_BIN/x86_64-linux-android21-clang"
+          build_zstd "x86" "$NDK_BIN/i686-linux-android21-clang"
 
       - name: Decode Release Keystore (if configured)
-        if: ${{ secrets.AGY_KEYSTORE_BASE64 != '' }}
+        env:
+          AGY_KEYSTORE_BASE64: ${{ secrets.AGY_KEYSTORE_BASE64 }}
         run: |
-          echo "${{ secrets.AGY_KEYSTORE_BASE64 }}" | base64 -d > /tmp/release.jks
-          echo "AGY_KEYSTORE_PATH=/tmp/release.jks" >> "$GITHUB_ENV"
+          if [ -n "$AGY_KEYSTORE_BASE64" ]; then
+            echo "$AGY_KEYSTORE_BASE64" | base64 -d > /tmp/release.jks
+            echo "AGY_KEYSTORE_PATH=/tmp/release.jks" >> "$GITHUB_ENV"
+          fi
 
-      - name: Build Full ARM64 Release APK
+      - name: Build Standalone Multi-Arch & Universal Release APKs
         env:
           AGY_KEYSTORE_PASSWORD: ${{ secrets.AGY_KEYSTORE_PASSWORD }}
           AGY_KEY_ALIAS: ${{ secrets.AGY_KEY_ALIAS }}
@@ -56,15 +71,60 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleRelease --no-daemon
+          mkdir -p dist
+          cp app/build/outputs/apk/release/AntigravityStandalone-*.apk dist/
 
-      - name: Verify APK with aapt2
+      - name: Build Lite Update Universal APK
+        env:
+          AGY_KEYSTORE_PASSWORD: ${{ secrets.AGY_KEYSTORE_PASSWORD }}
+          AGY_KEY_ALIAS: ${{ secrets.AGY_KEY_ALIAS }}
+          AGY_KEY_PASSWORD: ${{ secrets.AGY_KEY_PASSWORD }}
         run: |
-          APK=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$APK" | grep -E "package:|targetSdkVersion:|native-code:"
-          ls -lh "$APK"
+          ./gradlew :app:externalNativeBuildCleanRelease --no-daemon || true
+          touch app/src/main/cpp/termux-bootstrap-zip.S
+          ./gradlew :app:assembleRelease -PagyLiteUpdate=true --no-daemon
+          cp app/build/outputs/apk/release/AntigravityUpdate-*-universal-lite.apk dist/
 
-      - name: Upload APK Artifact
+      - name: Verify APKs with aapt2 & Generate Checksums
+        run: |
+          for APK in dist/*.apk; do
+            echo "=== $APK ==="
+            "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$APK" | grep -E "package:|application-label:|targetSdkVersion:|native-code:" || true
+          done
+          (cd dist && sha256sum *.apk > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          ls -lh dist/
+
+      - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AntigravityStandalone-arm64
-          path: app/build/outputs/apk/release/*.apk
+          name: Antigravity-v1.0.0-APKs
+          path: dist/*
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          cd dist
+          cat > release_notes.md <<'EOF'
+          ## Antigravity for Android — v1.0.0
+
+          Self-contained multi-architecture Android client for Google Antigravity (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`, and `universal`) with an embedded Linux runtime, native WebView microphone support for speech-to-text, agent job-completion notifications, and 1-tap offline `.tar.zst` backup & Termux library migration.
+
+          ### Which APK should I download?
+          - **`AntigravityStandalone-v1.0.0-<arch>.apk`** — Recommended for first-time / fresh installs. Pick your device architecture (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`) or **`AntigravityStandalone-v1.0.0-universal.apk`** if you aren't sure.
+          - **`AntigravityUpdate-v1.0.0-universal-lite.apk`** — Lightweight in-place update for existing installs where `/data/data/com.termux/files/usr` is already installed.
+
+          ### SHA-256 Checksums
+          ```
+          EOF
+          cat SHA256SUMS.txt >> release_notes.md
+          echo '```' >> release_notes.md
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file release_notes.md
+            gh release upload "$TAG" *.apk SHA256SUMS.txt --clobber
+          else
+            gh release create "$TAG" *.apk SHA256SUMS.txt --title "$TAG" --notes-file release_notes.md
+          fi

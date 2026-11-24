@@ -318,7 +318,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:text="Embedded ARM64 Linux shell is active, but Antigravity CLI (~/.local/bin/agy) is not installed yet."
+                android:text="Embedded Linux shell is active, but Antigravity CLI (~/.local/bin/agy) is not installed yet."
                 android:textColor="@color/agy_text_secondary"
                 android:textSize="13sp" />
 

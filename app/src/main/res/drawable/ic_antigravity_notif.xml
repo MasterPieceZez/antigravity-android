@@ -4,11 +4,15 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!-- Original open-source geometric upward delta mark -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M12,3 L20.5,20 L16.8,20 L12,10.2 L7.2,20 L3.5,20 Z" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M8.5,15.8 L15.5,15.8 L15.5,18.2 L8.5,18.2 Z" />
+    <!-- Official Google Antigravity glyph -->
+    <group
+        android:pivotX="12"
+        android:pivotY="12"
+        android:scaleX="0.85"
+        android:scaleY="0.85">
+        <path
+            android:fillColor="#FFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M21.751,22.607c1.34,1.005 3.35,0.335 1.508,-1.508C17.73,15.74 18.904,1 12.037,1 5.17,1 6.342,15.74 0.815,21.1c-2.01,2.009 0.167,2.511 1.507,1.506 5.192,-3.517 4.857,-9.714 9.715,-9.714 4.857,0 4.522,6.197 9.714,9.715z" />
+    </group>
 </vector>

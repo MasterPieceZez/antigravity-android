@@ -910,7 +910,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             splashStatus.text = "This is a Lite Update APK.\nInstall the full AntigravityStandalone.apk first, then apply this update."
             return
         }
-        splashStatus.text = "Preparing embedded ARM64 Linux engine..."
+        splashStatus.text = "Preparing embedded Linux engine..."
         TermuxInstaller.setupBootstrapIfNeeded(this) {
             if (isFinishing || isDestroyed) return@setupBootstrapIfNeeded
             bootstrapComplete = true
@@ -1225,7 +1225,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         scope.launch {
             val health = AntigravityEngine.getHealth()
             dotEngine.setBackgroundResource(if (health.engineReady) R.drawable.agy_dot_ok else R.drawable.agy_dot_off)
-            txtEngine.text = if (health.engineReady) "Embedded Engine: Active (ARM64)" else "Embedded Engine: Initializing"
+            txtEngine.text = if (health.engineReady) "Embedded Engine: Active (${Build.SUPPORTED_ABIS.firstOrNull() ?: "Linux"})" else "Embedded Engine: Initializing"
 
             dotHub.setBackgroundResource(if (health.hubReady) R.drawable.agy_dot_ok else R.drawable.agy_dot_off)
             txtHub.text = if (health.hubReady) "Antigravity Hub (4400): Online" else "Antigravity Hub (4400): Offline"

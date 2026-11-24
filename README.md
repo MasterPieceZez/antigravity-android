@@ -1,8 +1,8 @@
 # Antigravity for Android (Unofficial Standalone Client)
 
-[![Release](https://img.shields.io/github/v/release/m0m0d600c-design/antigravity-android?color=3B82F6&label=release)](https://github.com/m0m0d600c-design/antigravity-android/releases) [![Build](https://github.com/m0m0d600c-design/antigravity-android/actions/workflows/build-release.yml/badge.svg)](https://github.com/m0m0d600c-design/antigravity-android/actions/workflows/build-release.yml) ![ABI](https://img.shields.io/badge/ABI-arm64--v8a-14171D) ![License](https://img.shields.io/badge/license-GPL--3.0-22C55E)
+[![Release](https://img.shields.io/github/v/release/MasterPieceZez/antigravity-android?color=3B82F6&label=release)](https://github.com/MasterPieceZez/antigravity-android/releases) [![Build](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml/badge.svg)](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml) ![ABI](https://img.shields.io/badge/ABI-universal%20%7C%20arm64--v8a%20%7C%20armeabi--v7a%20%7C%20x86__64%20%7C%20x86-14171D) ![License](https://img.shields.io/badge/license-GPL--3.0-22C55E)
 
-A self-contained, ARM64-only Android wrapper around `termux-app` that embeds a native Linux runtime, runs Google Antigravity (`agy --hub`) silently in the background, and opens directly into the fullscreen Antigravity Web GUI—with zero external Termux app dependency, native microphone permissions for Antigravity's built-in speech-to-text, job-completion notifications, and 1-tap offline `.tar.zst` backup & migration.
+A self-contained, multi-architecture Android wrapper around `termux-app` that embeds a native Linux runtime, runs Google Antigravity (`agy --hub`) silently in the background, and opens directly into the fullscreen Antigravity Web GUI—with zero external Termux app dependency, native microphone permissions for Antigravity's built-in speech-to-text, job-completion notifications, and 1-tap offline `.tar.zst` backup & migration.
 
 > **Disclaimer:** This is an independent, unofficial open-source project and is not affiliated with, endorsed by, or sponsored by Google LLC or the Termux project.
 
@@ -10,7 +10,7 @@ A self-contained, ARM64-only Android wrapper around `termux-app` that embeds a n
 
 ## Key Features
 
-- **100% Self-Contained ARM64 Runtime:** Embeds `bootstrap-aarch64.zip`, PTY, and foreground `TermuxService` inside a single ~36 MB APK—no external Termux app or `RUN_COMMAND` intents required.
+- **100% Self-Contained Multi-Arch Runtime:** Available for `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`, and `universal`—embeds the Termux Linux bootstrap, PTY, and foreground `TermuxService` inside a single standalone APK with zero external Termux app or `RUN_COMMAND` intents required.
 - **Fullscreen Antigravity Web GUI:** Launches straight into `http://localhost:4400/#t=<token>` with dark `#0B0D10` zero-flash startup, OAuth external browser handoff (`accounts.google.com`), native file/image uploads, and double-back-to-exit protection.
 - **Native Mic Support for Antigravity STT:** Implements strict origin-checked `WebChromeClient.onPermissionRequest` (`localhost` / `127.0.0.1` audio-only) so Antigravity's built-in speech-to-text works directly inside the WebView.
 - **Agent Job-Done Notifications:** Sends high-priority Android notifications when a background agent task finishes (via `window.Notification` WebView bridge, debounced DOM state observer, and authenticated `POST 127.0.0.1:4401/notify` hook).
@@ -31,7 +31,7 @@ Because Android does not allow two apps with the same package ID signed by diffe
 ## Installation
 
 ### Option A: Fresh Install (No Backup Needed)
-1. Download the full `AntigravityStandalone-v1.3.0-arm64.apk` from **Releases** and install it on an `arm64-v8a` Android device.
+1. Download `AntigravityStandalone-v1.0.0-<arch>.apk` matching your device (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`) or `AntigravityStandalone-v1.0.0-universal.apk` from **Releases** and install it.
 2. Open **Antigravity** and grant **All Files Access** and **Disable Battery Optimization** on the setup card.
 3. Tap **Install Antigravity Automatically** on the onboarding screen—it installs `curl`, `python`, and `agy` inside the embedded Linux environment and boots straight into the GUI.
 
@@ -43,7 +43,7 @@ If you already have stock Termux installed with your packages, Python/Node toolc
    pkg install -y zstd tar && tar -cf - -C /data/data/com.termux/files --exclude='./usr/var/cache/*' --exclude='./usr/tmp/*' ./usr ./home | zstd -6 -T2 -o /sdcard/Download/termux-port.tar.zst && zstd -t /sdcard/Download/termux-port.tar.zst
    ```
 2. Uninstall stock Termux (and any Termux add-ons sharing `com.termux`).
-3. Install `AntigravityStandalone-v1.3.0-arm64.apk`, open **Antigravity**, and grant **All Files Access**.
+3. Install `AntigravityStandalone-v1.0.0-<arch>.apk` (or `universal`), open **Antigravity**, and grant **All Files Access**.
 4. Tap **Import Offline Backup / Port Termux (.tar.zst)**—it automatically detects `/sdcard/Download/termux-port.tar.zst` (or `termux-agy-master.tar.zst`), verifies integrity, restores all your libraries and home files 100% offline, and boots straight into Antigravity.
 
 ---
@@ -69,13 +69,13 @@ If you already have stock Termux installed with your packages, Python/Node toolc
 Requires **OpenJDK 17**, **Android SDK (API 36)**, **Build-Tools 36.0.0**, and **Android NDK 29.0.14206865**.
 
 ```bash
-# 1. Cross-compile arm64-v8a libzstd_cli.so (see .github/workflows/build-release.yml for exact flags)
-# 2. Download bootstrap-aarch64.zip into app/src/main/cpp/ (automatic via Gradle downloadBootstraps task)
+# 1. Cross-compile libzstd_cli.so for all ABIs (see .github/workflows/build-release.yml for exact flags)
+# 2. Download bootstrap-*.zip into app/src/main/cpp/ (automatic via Gradle downloadBootstraps task)
 
-# Build Full Standalone APK (~36 MB):
+# Build Full Standalone APKs (universal + arm64-v8a, armeabi-v7a, x86_64, x86):
 ./gradlew :app:assembleRelease
 
-# Build Lite In-Place Update APK (~3 MB, for existing installs):
+# Build Lite In-Place Update APKs (for existing installs):
 ./gradlew :app:assembleRelease -PagyLiteUpdate=true
 ```
 
