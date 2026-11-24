@@ -44,3 +44,5 @@ Thumbs.db
 local.properties
 app/src/main/cpp/bootstrap-*.zip
 .kotlin/
+__pycache__/
+*.pyc

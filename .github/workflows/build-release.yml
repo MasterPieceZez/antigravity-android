@@ -61,6 +61,9 @@ jobs:
           if [ -n "$AGY_KEYSTORE_BASE64" ]; then
             echo "$AGY_KEYSTORE_BASE64" | base64 -d > /tmp/release.jks
             echo "AGY_KEYSTORE_PATH=/tmp/release.jks" >> "$GITHUB_ENV"
+          elif [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            echo "::error::AGY_KEYSTORE_BASE64 secret is required for tagged releases to preserve in-place update signatures."
+            exit 1
           elif [ ! -f app/testkey_untrusted.jks ]; then
             keytool -genkeypair -v -keystore /tmp/ci-release.jks -storetype JKS \
               -keyalg RSA -keysize 2048 -validity 10000 -alias antigravity \
