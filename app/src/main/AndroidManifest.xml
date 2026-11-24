@@ -84,6 +84,16 @@
         </activity>
 
         <activity
+            android:name=".app.acp.AcpNativeActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
+            android:exported="false"
+            android:label="@string/antigravity_app_name"
+            android:resizeableActivity="true"
+            android:theme="@style/Theme.Antigravity.Dark"
+            android:windowSoftInputMode="adjustResize"
+            tools:targetApi="n" />
+
+        <activity
             android:name=".app.TermuxActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|density|screenLayout|keyboard|keyboardHidden|navigation"

@@ -1231,6 +1231,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             txtHub.text = if (health.hubReady) "Antigravity Hub (4400): Online" else "Antigravity Hub (4400): Offline"
         }
 
+        view.findViewById<View>(R.id.sheet_btn_native_acp).setOnClickListener {
+            dialog.dismiss()
+            startActivity(Intent(this, com.termux.app.acp.AcpNativeActivity::class.java))
+        }
+
         view.findViewById<View>(R.id.sheet_btn_reload).setOnClickListener {
             dialog.dismiss()
             val url = currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
