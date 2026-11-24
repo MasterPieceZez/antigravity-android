@@ -39,7 +39,7 @@ jobs:
           build_zstd() {
             local abi="$1"
             local cc="$2"
-            "$cc" -O2 -fPIE -pie -pthread -DZSTD_MULTITHREAD -DZSTD_NOBENCH -DZSTD_NODICT \
+            "$cc" -O2 -fPIE -pie -pthread -DZSTD_MULTITHREAD -DZSTD_NOBENCH -DZSTD_NODICT -DZSTD_DISABLE_ASM \
               -Ilib -Ilib/common -Ilib/compress -Ilib/decompress -Iprograms \
               lib/common/*.c lib/compress/*.c lib/decompress/*.c \
               programs/zstdcli.c programs/zstdcli_trace.c programs/util.c programs/timefn.c programs/fileio.c programs/fileio_asyncio.c \
