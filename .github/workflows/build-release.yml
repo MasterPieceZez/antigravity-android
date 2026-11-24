@@ -49,10 +49,10 @@ jobs:
             cp "/tmp/libzstd_cli_${abi}.so" "$GITHUB_WORKSPACE/app/src/main/jniLibs/${abi}/libzstd_cli.so"
           }
 
-          build_zstd "arm64-v8a" "$NDK_BIN/aarch64-linux-android21-clang"
-          build_zstd "armeabi-v7a" "$NDK_BIN/armv7a-linux-androideabi21-clang"
-          build_zstd "x86_64" "$NDK_BIN/x86_64-linux-android21-clang"
-          build_zstd "x86" "$NDK_BIN/i686-linux-android21-clang"
+          build_zstd "arm64-v8a" "$NDK_BIN/aarch64-linux-android24-clang"
+          build_zstd "armeabi-v7a" "$NDK_BIN/armv7a-linux-androideabi24-clang"
+          build_zstd "x86_64" "$NDK_BIN/x86_64-linux-android24-clang"
+          build_zstd "x86" "$NDK_BIN/i686-linux-android24-clang"
 
       - name: Decode Release Keystore (if configured)
         env:
