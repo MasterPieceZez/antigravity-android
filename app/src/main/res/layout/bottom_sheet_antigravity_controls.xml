@@ -213,6 +213,18 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
+        <TextView
+            android:id="@+id/sheet_btn_reinstall_cli"
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/agy_btn_secondary"
+            android:gravity="center"
+            android:text="Reinstall / Update Antigravity CLI"
+            android:textColor="@color/agy_text_secondary"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
         <!-- Power & Notifications -->
         <TextView
             android:layout_width="wrap_content"

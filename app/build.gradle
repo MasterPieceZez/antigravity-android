@@ -339,10 +339,94 @@ task buildAgyPatchNative() {
     }
 }
 
+task buildZstdNative() {
+    doLast {
+        def ndkDir = android.ndkDirectory
+        if (ndkDir == null || !ndkDir.exists()) return
+        def hostTag = org.gradle.internal.os.OperatingSystem.current().isWindows() ? "windows-x86_64" :
+            (org.gradle.internal.os.OperatingSystem.current().isMacOsX() ? "darwin-x86_64" : "linux-x86_64")
+        def binDir = new File(ndkDir, "toolchains/llvm/prebuilt/${hostTag}/bin")
+        def stripBin = new File(binDir, org.gradle.internal.os.OperatingSystem.current().isWindows() ? "llvm-strip.exe" : "llvm-strip")
+        def abis = [
+            "arm64-v8a": "aarch64-linux-android24-clang",
+            "x86_64": "x86_64-linux-android24-clang"
+        ]
+        boolean allPrebuilt = abis.keySet().every { abi -> file("src/main/jniLibs/${abi}/libzstd_cli.so").exists() }
+        if (allPrebuilt) return
+
+        def zstdVersion = "1.5.7"
+        def expectedSha = "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3"
+        def zstdCacheDir = new File(buildDir, "zstd-src")
+        def zstdSrcDir = new File(zstdCacheDir, "zstd-${zstdVersion}")
+        if (!zstdSrcDir.exists()) {
+            zstdCacheDir.mkdirs()
+            def tgz = new File(zstdCacheDir, "zstd-${zstdVersion}.tar.gz")
+            if (!tgz.exists()) {
+                def url = "https://github.com/facebook/zstd/releases/download/v${zstdVersion}/zstd-${zstdVersion}.tar.gz"
+                logger.quiet("Downloading zstd ${zstdVersion} for local native build...")
+                def conn = new URL(url).openConnection()
+                conn.setConnectTimeout(15000)
+                conn.setReadTimeout(60000)
+                conn.setInstanceFollowRedirects(true)
+                tgz.withOutputStream { out -> out << conn.inputStream }
+            }
+            def md = java.security.MessageDigest.getInstance("SHA-256")
+            tgz.withInputStream { ins ->
+                byte[] buf = new byte[8192]
+                int r
+                while ((r = ins.read(buf)) != -1) md.update(buf, 0, r)
+            }
+            def actual = new BigInteger(1, md.digest()).toString(16).padLeft(64, '0')
+            if (actual != expectedSha) {
+                tgz.delete()
+                throw new GradleException("Wrong checksum for zstd-${zstdVersion}.tar.gz: ${actual}")
+            }
+            def tarProc = new ProcessBuilder("tar", "-xzf", tgz.absolutePath, "-C", zstdCacheDir.absolutePath).inheritIO().start()
+            if (tarProc.waitFor() != 0) throw new GradleException("Failed to extract zstd source")
+        }
+
+        def cFiles = []
+        ["lib/common", "lib/compress", "lib/decompress"].each { sub ->
+            new File(zstdSrcDir, sub).listFiles()?.findAll { it.name.endsWith(".c") }?.each { cFiles << it.absolutePath }
+        }
+        ["zstdcli.c", "zstdcli_trace.c", "util.c", "timefn.c", "fileio.c", "fileio_asyncio.c"].each { f ->
+            cFiles << new File(zstdSrcDir, "programs/${f}").absolutePath
+        }
+
+        abis.each { abi, clangName ->
+            def prebuilt = file("src/main/jniLibs/${abi}/libzstd_cli.so")
+            def outDir = new File(buildDir, "generated/agyJniLibs/${abi}")
+            def outFile = new File(outDir, "libzstd_cli.so")
+            if (prebuilt.exists()) {
+                if (outFile.exists()) outFile.delete()
+                return
+            }
+            if (outFile.exists() && outFile.length() > 0) return
+            def cc = new File(binDir, org.gradle.internal.os.OperatingSystem.current().isWindows() ? "${clangName}.cmd" : clangName)
+            if (!cc.exists()) return
+            outDir.mkdirs()
+            def cmd = [
+                cc.absolutePath, "-O2", "-fPIE", "-pie", "-pthread",
+                "-DZSTD_MULTITHREAD", "-DZSTD_NOBENCH", "-DZSTD_NODICT", "-DZSTD_DISABLE_ASM",
+                "-I" + new File(zstdSrcDir, "lib").absolutePath,
+                "-I" + new File(zstdSrcDir, "lib/common").absolutePath,
+                "-I" + new File(zstdSrcDir, "lib/compress").absolutePath,
+                "-I" + new File(zstdSrcDir, "lib/decompress").absolutePath,
+                "-I" + new File(zstdSrcDir, "programs").absolutePath
+            ] + cFiles + ["-o", outFile.absolutePath]
+            def proc = new ProcessBuilder(cmd).inheritIO().start()
+            if (proc.waitFor() != 0) throw new GradleException("Failed to compile libzstd_cli.so for ${abi}")
+            if (stripBin.exists()) {
+                new ProcessBuilder(stripBin.absolutePath, outFile.absolutePath).inheritIO().start().waitFor()
+            }
+        }
+    }
+}
+
 afterEvaluate {
     android.applicationVariants.all { variant ->
-        variant.javaCompileProvider.get().dependsOn(downloadBootstraps)
         variant.preBuildProvider.get().dependsOn(buildAgyPatchNative)
+        variant.preBuildProvider.get().dependsOn(buildZstdNative)
     }
     tasks.matching { it.name.startsWith("externalNativeBuild") || it.name.startsWith("configureNdkBuild") }.configureEach {
         dependsOn(downloadBootstraps)

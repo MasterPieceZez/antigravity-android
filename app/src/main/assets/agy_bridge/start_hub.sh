@@ -4,7 +4,6 @@ set -u
 export PREFIX="/data/data/com.agy.os/files/usr"
 export HOME="/data/data/com.agy.os/files/home"
 export PATH="$HOME/.local/bin:$PREFIX/bin:$PATH"
-export LD_LIBRARY_PATH="$PREFIX/lib"
 export TMPDIR="$PREFIX/tmp"
 export TERM="xterm-256color"
 export LANG="en_US.UTF-8"
@@ -56,6 +55,8 @@ if [ -f "$AGY_BIN" ]; then
 
     if [ "$ACQUIRED" -eq 1 ]; then
         trap 'rm -rf "$LOCK_DIR" 2>/dev/null || true' EXIT
+    else
+        exit 0
     fi
 
     if ! pgrep -f "[/]agy --hub" >/dev/null 2>&1; then
@@ -64,7 +65,11 @@ if [ -f "$AGY_BIN" ]; then
             mv -f "$AGY_LOG" "$AGY_LOG.prev" 2>/dev/null || true
         fi
         : > "$AGY_LOG"
-        nohup "$AGY_BIN" --hub --hub-port=4400 > "$AGY_LOG" 2>&1 < /dev/null &
+        if command -v setsid >/dev/null 2>&1; then
+            setsid "$AGY_BIN" --hub --hub-port=4400 > "$AGY_LOG" 2>&1 < /dev/null &
+        else
+            nohup "$AGY_BIN" --hub --hub-port=4400 > "$AGY_LOG" 2>&1 < /dev/null &
+        fi
         printf '%s\n' "$!" > "$BRIDGE_DIR/hub.pid" 2>/dev/null || true
     fi
 fi

@@ -127,6 +127,8 @@ def main() -> int:
         make_raw_ustar_header(b"usr/evil", typeflag=b"1", linkname=b"../secret") + b"\0" * 1024,
         make_raw_ustar_header(b"usr/evil", typeflag=b"2", linkname=b"/storage/../../etc/passwd") + b"\0" * 1024,
         make_raw_ustar_header(b"usr/evil", typeflag=b"2", linkname=b"/data/data/com.agy.os/../shared_prefs/p") + b"\0" * 1024,
+        make_raw_ustar_header(b"a/", typeflag=b"2", linkname=b"../etc/passwd") + b"\0" * 1024,
+        make_raw_ustar_header(b"a/.", typeflag=b"2", linkname=b"../etc/passwd") + b"\0" * 1024,
         make_raw_ustar_header(b"usr/pax", typeflag=b"x", size=44) + b"99999999999999999999999999999999999 path=ok\n".ljust(512, b"\0") + b"\0" * 1024,
         b"\0" * 1024,
     ]
@@ -134,6 +136,18 @@ def main() -> int:
     with tarfile.open(fileobj=pax_buf, mode="w", format=tarfile.PAX_FORMAT) as tf:
         add_tar_bytes(tf, "usr/ok", b"", typeflag=tarfile.SYMTYPE, linkname="../" * 5 + "etc/passwd")
     unsafe_cases.append(pax_buf.getvalue())
+
+    sym_write_buf = io.BytesIO()
+    with tarfile.open(fileobj=sym_write_buf, mode="w", format=tarfile.PAX_FORMAT) as tf:
+        add_tar_bytes(tf, "usr/out", b"", typeflag=tarfile.SYMTYPE, linkname="/storage/emulated/0/Download")
+        add_tar_bytes(tf, "usr/out/evil.txt", b"pwn")
+    unsafe_cases.append(sym_write_buf.getvalue())
+
+    hard_sym_buf = io.BytesIO()
+    with tarfile.open(fileobj=hard_sym_buf, mode="w", format=tarfile.PAX_FORMAT) as tf:
+        add_tar_bytes(tf, "usr/link", b"", typeflag=tarfile.SYMTYPE, linkname="/storage/emulated/0/foo")
+        add_tar_bytes(tf, "usr/hard", b"", typeflag=tarfile.LNKTYPE, linkname="usr/link")
+    unsafe_cases.append(hard_sym_buf.getvalue())
 
     for idx, case_bytes in enumerate(unsafe_cases):
         res = run_patcher(bin_path, ["--check-tar"], case_bytes)

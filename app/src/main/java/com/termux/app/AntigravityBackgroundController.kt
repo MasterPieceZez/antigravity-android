@@ -35,7 +35,7 @@ object AntigravityBackgroundController {
     @JvmStatic
     fun isRunning(): Boolean {
         synchronized(lock) {
-            return bridgeServer != null
+            return bridgeServer?.isListening() == true
         }
     }
 

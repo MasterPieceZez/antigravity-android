@@ -10,6 +10,7 @@ import android.system.Os;
 import android.util.Pair;
 import android.view.WindowManager;
 
+import com.termux.BuildConfig;
 import com.termux.R;
 import com.termux.shared.file.FileUtils;
 import com.termux.shared.termux.crash.TermuxCrashUtils;
@@ -112,6 +113,13 @@ final class TermuxInstaller {
             }
         } else if (FileUtils.fileExists(TERMUX_PREFIX_DIR_PATH, false)) {
             Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" does not exist but another file exists at its destination.");
+        }
+
+        if (BuildConfig.AGY_LITE_UPDATE) {
+            MessageDialogUtils.showMessage(activity,
+                activity.getString(R.string.bootstrap_error_title),
+                "This is a Lite Update APK. Please install the full AntigravityStandalone APK first.", null);
+            return;
         }
 
         final ProgressDialog progress = ProgressDialog.show(activity, null, activity.getString(R.string.bootstrap_installer_body), true, false);

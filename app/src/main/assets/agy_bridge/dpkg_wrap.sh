@@ -57,7 +57,7 @@ for arg in "$@"; do
                         "$PATCH_BIN" --file "$cf"
                     fi
                 done
-                dpkg-deb --fsys-tarfile "$arg" | "$PATCH_BIN" --tar | tar -xf - --delay-directory-restore -C "$PKG_DIR"
+                dpkg-deb --fsys-tarfile "$arg" | "$PATCH_BIN" --tar | tar -xf - -p --delay-directory-restore -C "$PKG_DIR"
                 if [ -f "$PKG_DIR/DEBIAN/md5sums" ] && command -v md5sum >/dev/null 2>&1; then
                     (
                         cd "$PKG_DIR"

@@ -34,6 +34,10 @@ class LocalBridgeServer(
     private var serverSocket: ServerSocket? = null
     private var acceptJob: Job? = null
     private val clientSemaphore = Semaphore(16)
+    @Volatile
+    private var listening = false
+
+    fun isListening(): Boolean = listening && serverSocket?.isClosed == false
 
     fun start() {
         if (acceptJob?.isActive == true) return
@@ -47,6 +51,7 @@ class LocalBridgeServer(
                     InetAddress.getByName("127.0.0.1")
                 ).apply { reuseAddress = true }
                 serverSocket = ss
+                listening = true
                 while (isActive && !ss.isClosed) {
                     val client = try {
                         ss.accept()
@@ -56,10 +61,16 @@ class LocalBridgeServer(
                         delay(100L)
                         continue
                     }
+                    if (!clientSemaphore.tryAcquire()) {
+                        runCatching { client.close() }
+                        continue
+                    }
                     launch {
-                        clientSemaphore.withPermit {
+                        try {
                             runCatching { handleClient(client) }
                                 .onFailure { Logger.logDebug("LocalBridgeServer", "Client error: ${it.message}") }
+                        } finally {
+                            clientSemaphore.release()
                         }
                     }
                 }
@@ -67,11 +78,14 @@ class LocalBridgeServer(
                 if (isActive) {
                     Logger.logError("LocalBridgeServer", "Bridge failed on port ${AntigravityEngine.BRIDGE_PORT}: ${e.message}")
                 }
+            } finally {
+                listening = false
             }
         }
     }
 
     fun stop() {
+        listening = false
         runCatching { serverSocket?.close() }
         serverSocket = null
         acceptJob?.cancel()

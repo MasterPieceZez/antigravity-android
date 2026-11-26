@@ -39,4 +39,4 @@ jobs:
       - name: Execute unit tests
         run: |
           chmod +x gradlew
-          ./gradlew :app:testDebugUnitTest --no-daemon
+          ./gradlew :app:testDebugUnitTest :terminal-emulator:test --no-daemon

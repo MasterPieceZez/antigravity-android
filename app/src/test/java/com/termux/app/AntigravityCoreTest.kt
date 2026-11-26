@@ -96,6 +96,8 @@ class AntigravityCoreTest {
         assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "/data/data/com.agy.os/../shared_prefs/p"))
         assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "../secret", isHardLink = true))
         assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "/data/data/com.agy.os/files/usr/bin/sh", isHardLink = true))
+        assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("a/", "../etc/passwd"))
+        assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("a/.", "../etc/passwd"))
     }
 
     @Test

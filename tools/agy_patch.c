@@ -11,6 +11,7 @@ static const char OLD_PKG[] = "com.termux";
 static const char NEW_PKG[] = "com.agy.os";
 #define PKG_LEN 10
 #define MAX_TAR_PATH 8192
+#define MAX_TAR_META 65536
 
 static int buffer_contains_old_pkg(const uint8_t *buf, size_t len) {
     if (len < PKG_LEN) return 0;
@@ -53,10 +54,17 @@ static void copy_tar_cstr(const uint8_t *field, size_t field_len, char *out, siz
     out[n] = '\0';
 }
 
+static int is_ustar_header(const uint8_t *hdr) {
+    return memcmp(hdr + 257, "ustar\0", 6) == 0;
+}
+
 static void build_ustar_path(const uint8_t *hdr, char *out, size_t out_cap) {
     char prefix[156];
     char name[101];
-    copy_tar_cstr(hdr + 345, 155, prefix, sizeof(prefix));
+    prefix[0] = '\0';
+    if (is_ustar_header(hdr)) {
+        copy_tar_cstr(hdr + 345, 155, prefix, sizeof(prefix));
+    }
     copy_tar_cstr(hdr + 0, 100, name, sizeof(name));
     if (prefix[0] != '\0') {
         snprintf(out, out_cap, "%s/%s", prefix, name);
@@ -83,10 +91,11 @@ static int has_binary_or_compressed_ext(const char *path) {
         ".gz", ".tgz", ".xz", ".txz", ".bz2", ".tbz2",
         ".zst", ".tzst", ".lz4", ".7z", ".rar", ".tar",
         ".zip", ".deb", ".whl", ".jar", ".apk", ".pyc",
+        ".a", ".o", ".lzma", ".br", ".z", ".lzo", ".pak", ".v8", ".ico",
         ".png", ".jpg", ".jpeg", ".webp", ".gif",
         ".sqlite", ".sqlite3", ".db", ".ldb", ".sst",
         ".wasm", ".node", ".asar", ".pdf", ".woff2", ".otf", ".ttf",
-        ".mp3", ".mp4"
+        ".mp3", ".mp4", ".flac", ".ogg", ".wav", ".webm", ".mkv", ".avi"
     };
     size_t count = sizeof(exts) / sizeof(exts[0]);
     for (size_t i = 0; i < count; i++) {
@@ -283,7 +292,9 @@ static int mode_tar(void) {
 
         patch_tar_field(hdr + 0, 100);
         patch_tar_field(hdr + 157, 100);
-        patch_tar_field(hdr + 345, 155);
+        if (is_ustar_header(hdr)) {
+            patch_tar_field(hdr + 345, 155);
+        }
         recompute_tar_checksum(hdr);
 
         if (write_exact(stdout, hdr, 512) != 0) return 1;
@@ -295,15 +306,21 @@ static int mode_tar(void) {
             patch_buffer_inplace((uint8_t *)gnu_longname, (size_t)size);
             if (write_exact(stdout, (const uint8_t *)gnu_longname, (size_t)size) != 0) return 1;
             has_gnu_longname = 1;
-        } else if (typeflag == 'x' && size > 0 && size < MAX_TAR_PATH) {
-            char meta[MAX_TAR_PATH];
-            if (read_exact(stdin, (uint8_t *)meta, (size_t)size) != 1) return 1;
+        } else if (typeflag == 'x' && size > 0 && size < MAX_TAR_META) {
+            char *meta = (char *)malloc((size_t)size + 1);
+            if (!meta) return 1;
+            if (read_exact(stdin, (uint8_t *)meta, (size_t)size) != 1) {
+                free(meta);
+                return 1;
+            }
             meta[size] = '\0';
             (void)parse_pax_records(meta, (size_t)size,
                                     pax_path, sizeof(pax_path), &has_pax_path,
                                     pax_link_unused, sizeof(pax_link_unused), &has_pax_link_unused, 0);
             patch_buffer_inplace((uint8_t *)meta, (size_t)size);
-            if (write_exact(stdout, (const uint8_t *)meta, (size_t)size) != 0) return 1;
+            int wrc = write_exact(stdout, (const uint8_t *)meta, (size_t)size);
+            free(meta);
+            if (wrc != 0) return 1;
         } else if (size > 0) {
             int skip_patch = 0;
             int detect_magic = 0;
@@ -361,8 +378,92 @@ static int starts_with(const char *str, const char *prefix) {
     return strncmp(str, prefix, plen) == 0;
 }
 
+static void normalize_rel_for_compare(const char *p, char *out, size_t cap) {
+    if (!p || cap == 0) {
+        if (cap > 0) out[0] = '\0';
+        return;
+    }
+    while (p[0] == '.' && p[1] == '/') p += 2;
+    while (p[0] == '/') p++;
+    size_t n = 0;
+    for (const char *c = p; *c != '\0' && n + 1 < cap; c++) {
+        if (*c == '/' && (n == 0 || out[n - 1] == '/')) continue;
+        out[n++] = *c;
+    }
+    out[n] = '\0';
+    for (;;) {
+        while (n > 0 && out[n - 1] == '/') {
+            out[--n] = '\0';
+        }
+        if (n >= 2 && out[n - 2] == '/' && out[n - 1] == '.') {
+            n -= 2;
+            out[n] = '\0';
+        } else if (n == 1 && out[0] == '.') {
+            n = 0;
+            out[0] = '\0';
+        } else {
+            break;
+        }
+    }
+}
+
+static int ends_with_slash_or_dot(const char *p) {
+    if (!p || p[0] == '\0') return 1;
+    size_t len = strlen(p);
+    if (p[len - 1] == '/') return 1;
+    if (len >= 2 && p[len - 2] == '/' && p[len - 1] == '.') return 1;
+    if (len == 1 && p[0] == '.') return 1;
+    return 0;
+}
+
+typedef struct {
+    char **items;
+    size_t count;
+    size_t cap;
+} StrList;
+
+static int strlist_add(StrList *list, const char *s) {
+    if (list->count == list->cap) {
+        size_t next_cap = list->cap == 0 ? 16 : list->cap * 2;
+        char **next = (char **)realloc(list->items, next_cap * sizeof(char *));
+        if (!next) return -1;
+        list->items = next;
+        list->cap = next_cap;
+    }
+    size_t len = strlen(s);
+    char *copy = (char *)malloc(len + 1);
+    if (!copy) return -1;
+    memcpy(copy, s, len + 1);
+    list->items[list->count++] = copy;
+    return 0;
+}
+
+static void strlist_free(StrList *list) {
+    for (size_t i = 0; i < list->count; i++) {
+        free(list->items[i]);
+    }
+    free(list->items);
+    list->items = NULL;
+    list->count = 0;
+    list->cap = 0;
+}
+
+static int strlist_matches_prefix(const StrList *list, const char *norm_path, int allow_exact) {
+    for (size_t i = 0; i < list->count; i++) {
+        const char *sym = list->items[i];
+        size_t slen = strlen(sym);
+        if (slen == 0) continue;
+        if (strncmp(norm_path, sym, slen) == 0) {
+            if (norm_path[slen] == '/') return 1;
+            if (!allow_exact && norm_path[slen] == '\0') return 1;
+        }
+    }
+    return 0;
+}
+
 static int is_safe_symlink_target(const char *entry_path, const char *target) {
     if (!target || target[0] == '\0') return 0;
+    if (ends_with_slash_or_dot(entry_path)) return 0;
     for (const char *c = target; *c != '\0'; c++) {
         unsigned char uc = (unsigned char)*c;
         if (uc < 0x20 || *c == '\\') return 0;
@@ -375,11 +476,15 @@ static int is_safe_symlink_target(const char *entry_path, const char *target) {
                starts_with(target, "/sdcard/");
     }
 
+    char norm_entry[MAX_TAR_PATH];
+    normalize_rel_for_compare(entry_path, norm_entry, sizeof(norm_entry));
+    if (norm_entry[0] == '\0') return 0;
+
     int depth = 0;
-    const char *last_slash = strrchr(entry_path, '/');
+    const char *last_slash = strrchr(norm_entry, '/');
     if (last_slash) {
-        const char *seg = entry_path;
-        for (const char *c = entry_path; c <= last_slash; c++) {
+        const char *seg = norm_entry;
+        for (const char *c = norm_entry; c <= last_slash; c++) {
             if (*c == '/') {
                 size_t len = (size_t)(c - seg);
                 if (len == 2 && seg[0] == '.' && seg[1] == '.') return 0;
@@ -460,11 +565,16 @@ static int mode_check_tar(void) {
     char pax_link[MAX_TAR_PATH];
     int has_longname = 0, has_longlink = 0, has_pax_path = 0, has_pax_link = 0;
     int seen_entry = 0;
+    int ret = 1;
+    StrList symlinks = {NULL, 0, 0};
 
     for (;;) {
         int rc = read_exact(stdin, hdr, 512);
-        if (rc == 0) break;
-        if (rc < 0) return 1;
+        if (rc == 0) {
+            ret = seen_entry ? 0 : 1;
+            break;
+        }
+        if (rc < 0) goto cleanup;
 
         if (is_zero_block(hdr)) continue;
 
@@ -472,21 +582,29 @@ static int mode_check_tar(void) {
         uint64_t size = parse_tar_size(hdr + 124);
         if (size > UINT64_MAX - 512) {
             fprintf(stderr, "Oversized tar entry\n");
-            return 1;
+            goto cleanup;
         }
         size_t pad = size > 0 ? (size_t)((512 - (size % 512)) % 512) : 0;
 
         if (typeflag == 'L' || typeflag == 'K' || typeflag == 'x' || typeflag == 'g') {
-            if (size >= MAX_TAR_PATH) {
+            size_t max_meta = (typeflag == 'x' || typeflag == 'g') ? MAX_TAR_META : MAX_TAR_PATH;
+            if (size >= max_meta) {
                 fprintf(stderr, "Oversized tar metadata header\n");
-                return 1;
+                goto cleanup;
             }
-            char meta[MAX_TAR_PATH];
-            if (size > 0 && read_exact(stdin, (uint8_t *)meta, (size_t)size) != 1) return 1;
+            char *meta = (char *)malloc((size_t)size + 1);
+            if (!meta) goto cleanup;
+            if (size > 0 && read_exact(stdin, (uint8_t *)meta, (size_t)size) != 1) {
+                free(meta);
+                goto cleanup;
+            }
             meta[size] = '\0';
             if (pad > 0) {
                 uint8_t padbuf[512];
-                if (read_exact(stdin, padbuf, pad) != 1) return 1;
+                if (read_exact(stdin, padbuf, pad) != 1) {
+                    free(meta);
+                    goto cleanup;
+                }
             }
             if (typeflag == 'L') {
                 memcpy(longname, meta, (size_t)size + 1);
@@ -499,16 +617,19 @@ static int mode_check_tar(void) {
                                       pax_path, sizeof(pax_path), &has_pax_path,
                                       pax_link, sizeof(pax_link), &has_pax_link, 0) != 0) {
                     fprintf(stderr, "Invalid PAX header\n");
-                    return 1;
+                    free(meta);
+                    goto cleanup;
                 }
             } else {
                 if (parse_pax_records(meta, (size_t)size,
                                       pax_path, sizeof(pax_path), &has_pax_path,
                                       pax_link, sizeof(pax_link), &has_pax_link, 1) != 0) {
                     fprintf(stderr, "Unsafe global PAX path override\n");
-                    return 1;
+                    free(meta);
+                    goto cleanup;
                 }
             }
+            free(meta);
             continue;
         }
 
@@ -525,7 +646,14 @@ static int mode_check_tar(void) {
 
             if (!is_safe_rel_path(entry_path)) {
                 fprintf(stderr, "Rejected unsafe archive path: %s\n", entry_path);
-                return 1;
+                goto cleanup;
+            }
+
+            char norm_entry[MAX_TAR_PATH];
+            normalize_rel_for_compare(entry_path, norm_entry, sizeof(norm_entry));
+            if (norm_entry[0] != '\0' && strlist_matches_prefix(&symlinks, norm_entry, 1)) {
+                fprintf(stderr, "Rejected write through archive symlink: %s\n", entry_path);
+                goto cleanup;
             }
 
             if (typeflag == '1' || typeflag == '2') {
@@ -539,14 +667,20 @@ static int mode_check_tar(void) {
                 }
 
                 if (typeflag == '1') {
-                    if (link_target[0] == '\0' || !is_safe_rel_path(link_target)) {
+                    char norm_link[MAX_TAR_PATH];
+                    normalize_rel_for_compare(link_target, norm_link, sizeof(norm_link));
+                    if (link_target[0] == '\0' || !is_safe_rel_path(link_target) ||
+                        strlist_matches_prefix(&symlinks, norm_link, 0)) {
                         fprintf(stderr, "Rejected unsafe hardlink %s -> %s\n", entry_path, link_target);
-                        return 1;
+                        goto cleanup;
                     }
                 } else {
                     if (!is_safe_symlink_target(entry_path, link_target)) {
                         fprintf(stderr, "Rejected unsafe symlink %s -> %s\n", entry_path, link_target);
-                        return 1;
+                        goto cleanup;
+                    }
+                    if (norm_entry[0] != '\0' && strlist_add(&symlinks, norm_entry) != 0) {
+                        goto cleanup;
                     }
                 }
             }
@@ -559,11 +693,13 @@ static int mode_check_tar(void) {
 
         if (size + pad > 0 && discard_exact(stdin, size + pad) != 0) {
             fprintf(stderr, "Truncated tar archive\n");
-            return 1;
+            goto cleanup;
         }
     }
 
-    return seen_entry ? 0 : 1;
+cleanup:
+    strlist_free(&symlinks);
+    return ret;
 }
 
 static int mode_file(const char *path) {

@@ -21,6 +21,13 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v6
 
+      - name: Validate shell scripts & test agy_patch.c
+        run: |
+          bash -n app/src/main/assets/agy_bridge/start_hub.sh
+          bash -n app/src/main/assets/agy_bridge/dpkg_wrap.sh
+          gcc -O2 -std=c11 -Wall -Wextra -Werror tools/agy_patch.c -o /tmp/agy_patch_host
+          python3 tools/test_agy_patch.py /tmp/agy_patch_host
+
       - name: Setup java 17
         uses: actions/setup-java@v4
         with:

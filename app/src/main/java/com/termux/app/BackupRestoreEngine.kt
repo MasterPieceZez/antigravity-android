@@ -13,9 +13,11 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
+data class BackupResult(val displayName: String, val sizeBytes: Long)
+
 enum class BackupMode(val slug: String, val label: String) {
     FULL("full", "Full Backup (Personal)"),
-    PACKAGES_ONLY("packages", "Packages-Only (Shareable)")
+    PACKAGES_ONLY("packages", "Environment & Agents (No Home Files)")
 }
 
 object BackupRestoreEngine {
@@ -47,8 +49,11 @@ object BackupRestoreEngine {
                 normalizedAbs.startsWith("/sdcard/")
         }
 
+        val rawEntry = entryPath.trim().replace('\\', '/')
+        if (rawEntry.endsWith("/") || rawEntry.endsWith("/.") || rawEntry == ".") return false
+
         val entryParts = ArrayDeque<String>()
-        val normalizedEntry = entryPath.trim().replace('\\', '/')
+        val normalizedEntry = rawEntry.trimStart('/').removePrefix("./")
         val lastSlash = normalizedEntry.lastIndexOf('/')
         if (lastSlash > 0) {
             for (seg in normalizedEntry.substring(0, lastSlash).split('/')) {
@@ -73,107 +78,71 @@ object BackupRestoreEngine {
         return try {
             val zstd = resolveZstdBinary(context)
             val patchBin = File(context.applicationInfo.nativeLibraryDir, "libagy_patch.so")
+            if (!patchBin.isFile) {
+                return Result.failure(IllegalStateException("Required libagy_patch.so binary not found"))
+            }
             val env = AntigravityEngine.buildTermuxEnv()
             val zstdProc = ProcessBuilder(zstd.absolutePath, "-dc", archiveFile.absolutePath).apply {
                 environment().putAll(env)
             }.start()
 
-            if (patchBin.isFile) {
-                val checkProc = ProcessBuilder(patchBin.absolutePath, "--check-tar").apply {
-                    environment().putAll(env)
-                    redirectErrorStream(true)
-                }.start()
-                val zstdErr = StringBuilder()
-                val zstdErrThread = Thread {
-                    runCatching {
-                        zstdProc.errorStream.bufferedReader().forEachLine {
-                            if (zstdErr.length < 1000) zstdErr.append(it).append('\n')
-                        }
-                    }
-                }.apply { start() }
-                val checkErr = StringBuilder()
-                val checkErrThread = Thread {
-                    runCatching {
-                        checkProc.inputStream.bufferedReader().forEachLine {
-                            if (checkErr.length < 1000) checkErr.append(it).append('\n')
-                        }
-                    }
-                }.apply { start() }
-                val pipe = Thread {
-                    runCatching {
-                        zstdProc.inputStream.use { zOut ->
-                            checkProc.outputStream.use { cIn -> zOut.copyTo(cIn) }
-                        }
-                    }
-                }.apply { start() }
-                pipe.join()
-                zstdErrThread.join()
-                checkErrThread.join()
-                val zExit = zstdProc.waitFor()
-                val cExit = checkProc.waitFor()
-                return when {
-                    cExit != 0 -> Result.failure(
-                        SecurityException(checkErr.toString().trim().ifBlank { "Archive safety check failed (exit $cExit)" })
-                    )
-                    zExit != 0 -> Result.failure(
-                        IllegalStateException("zstd integrity check failed (exit $zExit): ${zstdErr.toString().trim()}")
-                    )
-                    else -> Result.success(Unit)
-                }
-            }
-
-            val tar = resolveTarBinary()
-            val tarProc = ProcessBuilder(tar.absolutePath, "-tvf", "-").apply {
+            val checkProc = ProcessBuilder(patchBin.absolutePath, "--check-tar").apply {
                 environment().putAll(env)
                 redirectErrorStream(true)
             }.start()
-            val pipe = Thread {
+            val zstdErr = StringBuilder()
+            val zstdErrThread = Thread {
                 runCatching {
-                    zstdProc.inputStream.use { zOut ->
-                        tarProc.outputStream.use { tIn -> zOut.copyTo(tIn) }
+                    zstdProc.errorStream.bufferedReader().forEachLine {
+                        if (zstdErr.length < 1000) zstdErr.append(it).append('\n')
                     }
                 }
             }.apply { start() }
-            var unsafeEntry: String? = null
-            tarProc.inputStream.bufferedReader().forEachLine { line ->
-                if (unsafeEntry == null) {
-                    val trimmed = line.trim()
-                    if (trimmed.contains(" -> ")) {
-                        val segs = trimmed.split(" -> ", limit = 2)
-                        val entry = segs[0].trim().substringAfterLast(' ')
-                        val target = segs[1].trim()
-                        if (!isSafeTarEntryPath(entry) || !isSafeArchiveLinkTarget(entry, target, isHardLink = false)) {
-                            unsafeEntry = trimmed
-                        }
-                    } else if (trimmed.contains(" link to ")) {
-                        val segs = trimmed.split(" link to ", limit = 2)
-                        val entry = segs[0].trim().substringAfterLast(' ')
-                        val target = segs[1].trim()
-                        if (!isSafeTarEntryPath(entry) || !isSafeArchiveLinkTarget(entry, target, isHardLink = true)) {
-                            unsafeEntry = trimmed
-                        }
-                    } else {
-                        val parts = trimmed.split(Regex("\\s+"), limit = 6)
-                        val path = if (parts.size >= 6) parts[5] else trimmed
-                        if (!isSafeTarEntryPath(path)) {
-                            unsafeEntry = trimmed
-                        }
+            val checkErr = StringBuilder()
+            val checkErrThread = Thread {
+                runCatching {
+                    checkProc.inputStream.bufferedReader().forEachLine {
+                        if (checkErr.length < 1000) checkErr.append(it).append('\n')
                     }
                 }
-            }
+            }.apply { start() }
+            val pipe = Thread {
+                runCatching {
+                    zstdProc.inputStream.use { zOut ->
+                        checkProc.outputStream.use { cIn -> zOut.copyTo(cIn) }
+                    }
+                }
+            }.apply { start() }
             pipe.join()
+            zstdErrThread.join()
+            checkErrThread.join()
             val zExit = zstdProc.waitFor()
-            val tExit = tarProc.waitFor()
-            if (unsafeEntry != null) {
-                Result.failure(SecurityException("Rejected unsafe archive path: $unsafeEntry"))
-            } else if (zExit != 0 || tExit != 0) {
-                Result.failure(IllegalStateException("Archive listing failed (zstd=$zExit, tar=$tExit)"))
-            } else {
-                Result.success(Unit)
+            val cExit = checkProc.waitFor()
+            when {
+                cExit != 0 -> Result.failure(
+                    SecurityException(checkErr.toString().trim().ifBlank { "Archive safety check failed (exit $cExit)" })
+                )
+                zExit != 0 -> Result.failure(
+                    IllegalStateException("zstd integrity check failed (exit $zExit): ${zstdErr.toString().trim()}")
+                )
+                else -> Result.success(Unit)
             }
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    private fun sha256File(file: File): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        FileInputStream(file).use { fis ->
+            val buf = ByteArray(128 * 1024)
+            while (true) {
+                val n = fis.read(buf)
+                if (n <= 0) break
+                digest.update(buf, 0, n)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private val operationInProgress = AtomicBoolean(false)
@@ -270,6 +239,7 @@ object BackupRestoreEngine {
             if (checkResult.isFailure) {
                 return checkResult
             }
+            val expectedSha = sha256File(archiveFile)
 
             onProgress(8, "Stopping background processes...")
             AntigravityEngine.stopBackgroundProcesses()
@@ -277,7 +247,14 @@ object BackupRestoreEngine {
             val zstd = resolveZstdBinary(context)
             val tar = resolveTarBinary()
             val patchBin = File(context.applicationInfo.nativeLibraryDir, "libagy_patch.so")
+            if (!patchBin.isFile) {
+                return Result.failure(IllegalStateException("Required libagy_patch.so binary not found"))
+            }
             val env = AntigravityEngine.buildTermuxEnv()
+
+            val stagingDir = File(filesRoot, "restore-staging")
+            if (stagingDir.exists()) stagingDir.deleteRecursively()
+            stagingDir.mkdirs()
 
             onProgress(10, "Extracting Linux environment & Antigravity...")
 
@@ -285,50 +262,40 @@ object BackupRestoreEngine {
                 environment().putAll(env)
             }.start()
 
-            val patchProc = if (patchBin.isFile) {
-                ProcessBuilder(patchBin.absolutePath, "--tar").apply {
-                    environment().putAll(env)
-                }.start()
-            } else {
-                null
-            }
+            val patchProc = ProcessBuilder(patchBin.absolutePath, "--tar").apply {
+                environment().putAll(env)
+            }.start()
 
             val tarProc = ProcessBuilder(
                 tar.absolutePath,
                 "-xf", "-",
-                "-C", AntigravityEngine.FILES_DIR,
-                "--recursive-unlink",
+                "-C", stagingDir.absolutePath,
                 "--preserve-permissions"
             ).apply {
                 environment().putAll(env)
                 redirectErrorStream(true)
             }.start()
 
-            val pipe1Thread = if (patchProc != null) {
-                Thread {
-                    try {
-                        zstdProc.inputStream.use { zOut ->
-                            patchProc.outputStream.use { pIn ->
-                                val buf = ByteArray(128 * 1024)
-                                while (true) {
-                                    val read = zOut.read(buf)
-                                    if (read <= 0) break
-                                    pIn.write(buf, 0, read)
-                                }
-                                pIn.flush()
+            val pipe1Thread = Thread {
+                try {
+                    zstdProc.inputStream.use { zOut ->
+                        patchProc.outputStream.use { pIn ->
+                            val buf = ByteArray(128 * 1024)
+                            while (true) {
+                                val read = zOut.read(buf)
+                                if (read <= 0) break
+                                pIn.write(buf, 0, read)
                             }
+                            pIn.flush()
                         }
-                    } catch (_: Exception) {
                     }
-                }.apply { start() }
-            } else {
-                null
-            }
+                } catch (_: Exception) {
+                }
+            }.apply { start() }
 
             val pipeThread = Thread {
                 try {
-                    val srcStream = patchProc?.inputStream ?: zstdProc.inputStream
-                    srcStream.use { sOut ->
+                    patchProc.inputStream.use { sOut ->
                         tarProc.outputStream.use { tIn ->
                             val buf = ByteArray(128 * 1024)
                             while (true) {
@@ -363,18 +330,20 @@ object BackupRestoreEngine {
 
             var bytesRead = 0L
             var lastUpdate = 0L
+            val streamDigest = java.security.MessageDigest.getInstance("SHA-256")
             FileInputStream(archiveFile).use { fis ->
                 zstdProc.outputStream.use { zIn ->
                     val buf = ByteArray(128 * 1024)
                     while (true) {
                         val n = fis.read(buf)
                         if (n <= 0) break
+                        streamDigest.update(buf, 0, n)
                         zIn.write(buf, 0, n)
                         bytesRead += n
                         val now = System.currentTimeMillis()
                         if (now - lastUpdate > 150L) {
                             lastUpdate = now
-                            val pct = 10 + ((bytesRead * 82) / totalBytes).toInt().coerceIn(0, 82)
+                            val pct = 10 + ((bytesRead * 80) / totalBytes).toInt().coerceIn(0, 80)
                             val readMb = bytesRead / (1024.0 * 1024.0)
                             onProgress(
                                 pct,
@@ -386,19 +355,33 @@ object BackupRestoreEngine {
                 }
             }
 
-            pipe1Thread?.join()
+            pipe1Thread.join()
             pipeThread.join()
             tarLogThread.join()
             zstdErrThread.join()
 
             val zstdExit = zstdProc.waitFor()
-            val patchExit = patchProc?.waitFor() ?: 0
+            val patchExit = patchProc.waitFor()
             val tarExit = tarProc.waitFor()
+            val actualSha = streamDigest.digest().joinToString("") { "%02x".format(it) }
+
+            if (actualSha != expectedSha) {
+                runCatching { stagingDir.deleteRecursively() }
+                return Result.failure(SecurityException("Archive changed during restore (TOCTOU detected)"))
+            }
 
             if (zstdExit != 0 || patchExit != 0 || tarExit != 0) {
+                runCatching { stagingDir.deleteRecursively() }
                 return Result.failure(
                     IllegalStateException("Restore failed (zstd=$zstdExit, patch=$patchExit, tar=$tarExit): $zstdErr $tarLog".trim())
                 )
+            }
+
+            onProgress(92, "Swapping staged environment...")
+            val swapRes = swapStagedDirs(filesRoot, stagingDir)
+            runCatching { stagingDir.deleteRecursively() }
+            if (swapRes.isFailure) {
+                return swapRes
             }
 
             onProgress(95, "Fixing permissions & provisioning bridge...")
@@ -452,6 +435,39 @@ object BackupRestoreEngine {
         }
     }
 
+    private fun swapStagedDirs(filesRoot: File, stagingDir: File): Result<Unit> {
+        val swapped = mutableListOf<Pair<File, File>>()
+        try {
+            val children = stagingDir.listFiles() ?: emptyArray()
+            for (stagedChild in children) {
+                val target = File(filesRoot, stagedChild.name)
+                val backup = File(filesRoot, "${stagedChild.name}.restore-bak")
+                if (backup.exists()) backup.deleteRecursively()
+                if (target.exists()) {
+                    if (!target.renameTo(backup)) {
+                        throw IllegalStateException("Failed to stage backup of ${target.name}")
+                    }
+                    swapped.add(target to backup)
+                }
+                if (!stagedChild.renameTo(target)) {
+                    throw IllegalStateException("Failed to move restored ${stagedChild.name} into place")
+                }
+            }
+            for ((_, backup) in swapped) {
+                runCatching { backup.deleteRecursively() }
+            }
+            return Result.success(Unit)
+        } catch (e: Exception) {
+            for ((target, backup) in swapped.asReversed()) {
+                runCatching {
+                    if (target.exists()) target.deleteRecursively()
+                    backup.renameTo(target)
+                }
+            }
+            return Result.failure(e)
+        }
+    }
+
     private fun fixPostRestorePermissions(context: Context) {
         val agyBin = File(AntigravityEngine.AGY_BIN)
         if (agyBin.isFile) {
@@ -472,16 +488,21 @@ object BackupRestoreEngine {
         context: Context,
         mode: BackupMode,
         onProgress: (percent: Int, status: String) -> Unit
-    ): Result<File> = withContext(Dispatchers.IO) {
+    ): Result<BackupResult> = withContext(Dispatchers.IO) {
         if (!operationInProgress.compareAndSet(false, true)) {
             return@withContext Result.failure(IllegalStateException("Another backup or restore is already running"))
         }
+        val canDirectDownloads = AntigravityFileHelper.hasPublicDownloadsWriteAccess(context)
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
+        val baseFileName = "antigravity-${mode.slug}-$stamp.tar.zst"
+        val outFile = if (canDirectDownloads) {
+            val downloads = getDownloadsDir()
+            if (!downloads.exists()) downloads.mkdirs()
+            AntigravityFileHelper.uniqueFile(downloads, baseFileName)
+        } else {
+            File(context.cacheDir, baseFileName)
+        }
         try {
-            if (!AntigravityFileHelper.hasPublicDownloadsWriteAccess(context)) {
-                return@withContext Result.failure(
-                    IllegalStateException("Grant All Files Access in Android Settings to save backups to Downloads")
-                )
-            }
             val zstd = resolveZstdBinary(context)
             val tar = resolveTarBinary()
             val env = AntigravityEngine.buildTermuxEnv()
@@ -499,11 +520,6 @@ object BackupRestoreEngine {
             if (targets.isEmpty()) {
                 return@withContext Result.failure(IllegalStateException("No environment directories found to back up"))
             }
-
-            val downloads = getDownloadsDir()
-            if (!downloads.exists()) downloads.mkdirs()
-            val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
-            val outFile = AntigravityFileHelper.uniqueFile(downloads, "antigravity-${mode.slug}-$stamp.tar.zst")
 
             onProgress(5, "Archiving & compressing (${mode.label})...")
 
@@ -597,10 +613,25 @@ object BackupRestoreEngine {
                 return@withContext Result.failure(verify.exceptionOrNull() ?: IllegalStateException("Verification failed"))
             }
 
-            val finalMb = outFile.length() / (1024.0 * 1024.0)
-            onProgress(100, String.format(Locale.US, "Verified: %s (%.1f MB)", outFile.name, finalMb))
-            Result.success(outFile)
+            val finalBytes = outFile.length()
+            val finalMb = finalBytes / (1024.0 * 1024.0)
+            val displayLoc = if (canDirectDownloads) {
+                outFile.name
+            } else {
+                val saved = AntigravityFileHelper.saveToDownloadsWithFallback(
+                    context,
+                    outFile.name,
+                    "application/zstd"
+                ) { dst ->
+                    FileInputStream(outFile).use { src -> src.copyTo(dst) }
+                }
+                runCatching { outFile.delete() }
+                saved.getOrElse { return@withContext Result.failure(it) }
+            }
+            onProgress(100, String.format(Locale.US, "Verified: %s (%.1f MB)", displayLoc, finalMb))
+            Result.success(BackupResult(displayLoc, finalBytes))
         } catch (e: Exception) {
+            if (!canDirectDownloads) runCatching { outFile.delete() }
             Result.failure(e)
         } finally {
             operationInProgress.set(false)

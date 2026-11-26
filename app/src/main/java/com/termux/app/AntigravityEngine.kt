@@ -70,7 +70,7 @@ object AntigravityEngine {
 
     fun isBootstrapReady(): Boolean = File(BASH_BIN).exists()
 
-    fun isAgyInstalled(): Boolean = File(AGY_BIN).exists()
+    fun isAgyInstalled(): Boolean = File(AGY_BIN).let { it.isFile && it.length() > 0 }
 
     fun isInstallRunning(): Boolean = installInProgress.get()
 
@@ -95,7 +95,6 @@ object AntigravityEngine {
         env["PREFIX"] = PREFIX_DIR
         env["HOME"] = HOME_DIR
         env["PATH"] = "$HOME_DIR/.local/bin:$PREFIX_DIR/bin:/system/bin:/system/xbin"
-        env["LD_LIBRARY_PATH"] = "$PREFIX_DIR/lib"
         env["TMPDIR"] = "$PREFIX_DIR/tmp"
         env["TERM"] = "xterm-256color"
         env["LANG"] = "en_US.UTF-8"
@@ -587,6 +586,7 @@ object AntigravityEngine {
         val recordedPid = runCatching { pidFile.takeIf { it.isFile }?.readText()?.trim()?.toIntOrNull() }.getOrNull()
         runCatching { pidFile.delete() }
         if (recordedPid != null && recordedPid > 0) {
+            runCatching { Os.kill(-recordedPid, 15) } // SIGTERM process group
             runCatching { Os.kill(recordedPid, 15) } // SIGTERM
         }
         val pkill = File("$PREFIX_DIR/bin/pkill")
@@ -605,6 +605,7 @@ object AntigravityEngine {
             }
             if (isPortOpen(HUB_PORT, 100)) {
                 if (recordedPid != null && recordedPid > 0) {
+                    runCatching { Os.kill(-recordedPid, 9) } // SIGKILL process group
                     runCatching { Os.kill(recordedPid, 9) } // SIGKILL
                 }
                 runCatching {
