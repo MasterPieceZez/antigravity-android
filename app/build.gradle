@@ -1,0 +1,286 @@
+plugins {
+    id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+}
+
+ext {
+    packageVariant = System.getenv("TERMUX_PACKAGE_VARIANT") ?: "apt-android-7"
+    liteUpdate = project.hasProperty("agyLiteUpdate") && project.property("agyLiteUpdate").toString() == "true"
+}
+
+android {
+    namespace "com.termux"
+
+    compileSdkVersion project.properties.compileSdkVersion.toInteger()
+    ndkVersion = System.getenv("JITPACK_NDK_VERSION") ?: project.properties.ndkVersion
+
+    dependencies {
+        implementation "androidx.annotation:annotation:1.9.0"
+        implementation "androidx.core:core:1.13.1"
+        implementation "androidx.core:core-ktx:1.13.1"
+        implementation "androidx.activity:activity-ktx:1.9.3"
+        implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.8.7"
+        implementation "androidx.drawerlayout:drawerlayout:1.2.0"
+        implementation "androidx.preference:preference:1.2.1"
+        implementation "androidx.viewpager:viewpager:1.0.0"
+        implementation "com.google.android.material:material:1.12.0"
+        implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0"
+        implementation "com.google.guava:guava:24.1-jre"
+        implementation "io.noties.markwon:core:$markwonVersion"
+        implementation "io.noties.markwon:ext-strikethrough:$markwonVersion"
+        implementation "io.noties.markwon:linkify:$markwonVersion"
+        implementation "io.noties.markwon:recycler:$markwonVersion"
+        implementation 'com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava'
+
+
+        implementation project(":terminal-view")
+        implementation project(":termux-shared")
+    }
+
+    defaultConfig {
+        applicationId "com.agy.os"
+        minSdkVersion project.properties.minSdkVersion.toInteger()
+        targetSdkVersion project.properties.targetSdkVersion.toInteger()
+        versionCode 100
+        versionName "1.0.0"
+
+        buildConfigField "String", "TERMUX_PACKAGE_VARIANT", "\"" + project.ext.packageVariant + "\""
+        buildConfigField "boolean", "AGY_LITE_UPDATE", project.ext.liteUpdate.toString()
+
+        manifestPlaceholders.TERMUX_PACKAGE_NAME = "com.agy.os"
+        manifestPlaceholders.TERMUX_APP_NAME = "Antigravity"
+        manifestPlaceholders.TERMUX_API_APP_NAME = "Termux:API"
+        manifestPlaceholders.TERMUX_BOOT_APP_NAME = "Termux:Boot"
+        manifestPlaceholders.TERMUX_FLOAT_APP_NAME = "Termux:Float"
+        manifestPlaceholders.TERMUX_STYLING_APP_NAME = "Termux:Styling"
+        manifestPlaceholders.TERMUX_TASKER_APP_NAME = "Termux:Tasker"
+        manifestPlaceholders.TERMUX_WIDGET_APP_NAME = "Termux:Widget"
+
+        externalNativeBuild {
+            ndkBuild {
+                def flags = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-Os", "-fno-stack-protector", "-Wl,--gc-sections"]
+                if (project.ext.liteUpdate) {
+                    arguments "AGY_LITE_UPDATE=1"
+                }
+                cFlags(*flags)
+            }
+        }
+    }
+
+    splits {
+        abi {
+            enable true
+            reset()
+            include "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
+            universalApk true
+        }
+    }
+
+    signingConfigs {
+        debug {
+            storeFile file('testkey_untrusted.jks')
+            keyAlias 'alias'
+            storePassword 'xrj45yWGLbsO7W0v'
+            keyPassword 'xrj45yWGLbsO7W0v'
+        }
+        release {
+            def ksPath = System.getenv("AGY_KEYSTORE_PATH")
+            if (ksPath && file(ksPath).exists()) {
+                storeFile file(ksPath)
+                keyAlias System.getenv("AGY_KEY_ALIAS") ?: "antigravity"
+                storePassword System.getenv("AGY_KEYSTORE_PASSWORD") ?: ""
+                keyPassword System.getenv("AGY_KEY_PASSWORD") ?: ""
+            }
+            enableV1Signing true
+            enableV2Signing true
+            enableV3Signing true
+        }
+    }
+
+    buildTypes {
+        release {
+            def ksPath = System.getenv("AGY_KEYSTORE_PATH")
+            signingConfig (ksPath && file(ksPath).exists() ? signingConfigs.release : signingConfigs.debug)
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+
+        debug {
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+
+    externalNativeBuild {
+        ndkBuild {
+            path "src/main/cpp/Android.mk"
+        }
+    }
+
+    lint {
+        disable 'ProtectedPermissions'
+        abortOnError false
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            if (variant.buildType.name == "release") {
+                def abi = output.filters.find { it.filterType == "ABI" }?.identifier ?: "universal"
+                outputFileName = project.ext.liteUpdate ? "AntigravityUpdate-v${variant.versionName}-${abi}-lite.apk" : "AntigravityStandalone-v${variant.versionName}-${abi}.apk"
+            }
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+}
+
+dependencies {
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.robolectric:robolectric:4.10"
+    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:1.1.5"
+}
+
+def patchBytesInPlace(byte[] data, byte[] oldSeq, byte[] newSeq) {
+    if (data.length < oldSeq.length) return
+    int limit = data.length - oldSeq.length
+    for (int i = 0; i <= limit; ) {
+        boolean match = true
+        for (int j = 0; j < oldSeq.length; j++) {
+            if (data[i + j] != oldSeq[j]) {
+                match = false
+                break
+            }
+        }
+        if (match) {
+            System.arraycopy(newSeq, 0, data, i, newSeq.length)
+            i += oldSeq.length
+        } else {
+            i++
+        }
+    }
+}
+
+def patchBootstrapZip(File origZip, File outZip) {
+    if (outZip.exists() && outZip.lastModified() >= origZip.lastModified() && outZip.length() > 0) {
+        return
+    }
+    logger.quiet("Patching bootstrap " + origZip.name + " -> com.agy.os ...")
+    byte[] oldBytes = "com.termux".getBytes("US-ASCII")
+    byte[] newBytes = "com.agy.os".getBytes("US-ASCII")
+    def zis = new java.util.zip.ZipInputStream(new BufferedInputStream(new FileInputStream(origZip)))
+    def zos = new java.util.zip.ZipOutputStream(new BufferedOutputStream(new FileOutputStream(outZip)))
+    try {
+        byte[] buf = new byte[16384]
+        def entry
+        while ((entry = zis.nextEntry) != null) {
+            def outEntry = new java.util.zip.ZipEntry(entry.name)
+            zos.putNextEntry(outEntry)
+            if (!entry.isDirectory()) {
+                def baos = new ByteArrayOutputStream()
+                int n
+                while ((n = zis.read(buf)) != -1) {
+                    baos.write(buf, 0, n)
+                }
+                byte[] content = baos.toByteArray()
+                String lower = entry.name.toLowerCase(Locale.US)
+                boolean isCompressed = lower.endsWith(".gz") || lower.endsWith(".xz") || lower.endsWith(".bz2") || lower.endsWith(".zst") || lower.endsWith(".zip")
+                if (!isCompressed) {
+                    patchBytesInPlace(content, oldBytes, newBytes)
+                }
+                zos.write(content)
+            }
+            zos.closeEntry()
+        }
+    } finally {
+        zis.close()
+        zos.close()
+    }
+}
+
+def downloadBootstrap(String arch, String expectedChecksum, String version) {
+    def digest = java.security.MessageDigest.getInstance("SHA-256")
+    def origFile = new File(projectDir, "src/main/cpp/bootstrap-" + arch + ".orig.zip")
+    def patchedFile = new File(projectDir, "src/main/cpp/bootstrap-" + arch + ".zip")
+    boolean needDownload = true
+    if (origFile.exists()) {
+        def buffer = new byte[8192]
+        def input = new FileInputStream(origFile)
+        try {
+            while (true) {
+                def readBytes = input.read(buffer)
+                if (readBytes < 0) break
+                digest.update(buffer, 0, readBytes)
+            }
+        } finally {
+            input.close()
+        }
+        def checksum = new BigInteger(1, digest.digest()).toString(16)
+        while (checksum.length() < 64) { checksum = "0" + checksum }
+        if (checksum == expectedChecksum) {
+            needDownload = false
+        } else {
+            origFile.delete()
+        }
+    }
+
+    if (needDownload) {
+        def remoteUrl = "https://github.com/termux/termux-packages/releases/download/bootstrap-" + version + "/bootstrap-" + arch + ".zip"
+        logger.quiet("Downloading " + remoteUrl + " ...")
+        origFile.parentFile.mkdirs()
+        def out = new BufferedOutputStream(new FileOutputStream(origFile))
+        def connection = new URL(remoteUrl).openConnection()
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (compatible; Google-Agent; +https://developers.google.com/crawling/docs/crawlers-fetchers/google-agent)")
+        connection.setInstanceFollowRedirects(true)
+        def digestStream = new java.security.DigestInputStream(connection.inputStream, digest)
+        out << digestStream
+        out.close()
+
+        def checksum = new BigInteger(1, digest.digest()).toString(16)
+        while (checksum.length() < 64) { checksum = "0" + checksum }
+        if (checksum != expectedChecksum) {
+            origFile.delete()
+            throw new GradleException("Wrong checksum for " + remoteUrl + ": expected: " + expectedChecksum + ", actual: " + checksum)
+        }
+    }
+
+    patchBootstrapZip(origFile, patchedFile)
+}
+
+task downloadBootstraps() {
+    doLast {
+        if (!project.ext.liteUpdate) {
+            def version = "2026.02.12-r1" + "%2B" + "apt.android-7"
+            downloadBootstrap("aarch64", "ea2aeba8819e517db711f8c32369e89e7c52cee73e07930ff91185e1ab93f4f3", version)
+            downloadBootstrap("arm", "a38f4d3b2f735f83be2bf54eff463e86dc32a3e2f9f861c1557c4378d249c018", version)
+            downloadBootstrap("x86_64", "b7fd0f2e3a4de534be3144f9f91acc768630fc463eaf134ab2e64c545e834f7a", version)
+            downloadBootstrap("i686", "f5bc0b025b9f3b420b5fcaeefc064f888f5f22a0d6fd7090f4aac0c33eb3555b", version)
+        }
+    }
+}
+
+afterEvaluate {
+    android.applicationVariants.all { variant ->
+        variant.javaCompileProvider.get().dependsOn(downloadBootstraps)
+    }
+    tasks.matching { it.name.startsWith("externalNativeBuild") || it.name.startsWith("configureNdkBuild") }.configureEach {
+        dependsOn(downloadBootstraps)
+    }
+}

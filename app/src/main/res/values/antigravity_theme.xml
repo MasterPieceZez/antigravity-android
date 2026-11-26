@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="antigravity_app_name">Antigravity</string>
+
+    <color name="agy_bg">#0B0D10</color>
+    <color name="agy_surface">#14171D</color>
+    <color name="agy_surface_elevated">#1B2028</color>
+    <color name="agy_border">#2A2F38</color>
+    <color name="agy_text_primary">#E6EAF0</color>
+    <color name="agy_text_secondary">#94A3B8</color>
+    <color name="agy_accent">#3B82F6</color>
+    <color name="agy_ok">#22C55E</color>
+    <color name="agy_warn">#F59E0B</color>
+    <color name="agy_danger">#EF4444</color>
+
+    <style name="Theme.Antigravity.Dark" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/agy_bg</item>
+        <item name="android:colorBackground">@color/agy_bg</item>
+        <item name="android:statusBarColor">@color/agy_bg</item>
+        <item name="android:navigationBarColor">@color/agy_bg</item>
+        <item name="colorPrimary">@color/agy_accent</item>
+        <item name="colorPrimaryVariant">@color/agy_accent</item>
+        <item name="colorSecondary">@color/agy_accent</item>
+        <item name="colorSurface">@color/agy_surface</item>
+        <item name="android:textColorPrimary">@color/agy_text_primary</item>
+        <item name="android:textColorSecondary">@color/agy_text_secondary</item>
+    </style>
+
+    <style name="Theme.Antigravity.BottomSheet" parent="Theme.MaterialComponents.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/Widget.Antigravity.BottomSheet</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/agy_surface</item>
+        <item name="colorPrimary">@color/agy_accent</item>
+        <item name="colorSurface">@color/agy_surface</item>
+        <item name="android:textColorPrimary">@color/agy_text_primary</item>
+        <item name="android:textColorSecondary">@color/agy_text_secondary</item>
+    </style>
+
+    <style name="Widget.Antigravity.BottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
+        <item name="android:background">@drawable/agy_sheet_bg</item>
+    </style>
+</resources>
