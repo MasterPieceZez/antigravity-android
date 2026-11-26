@@ -39,10 +39,12 @@ object BackupRestoreEngine {
         if (isHardLink) return isSafeTarEntryPath(trimmed)
 
         if (trimmed.startsWith("/")) {
-            return trimmed.startsWith("/data/data/com.termux/") ||
-                trimmed.startsWith("/data/data/com.agy.os/") ||
-                trimmed.startsWith("/storage/") ||
-                trimmed.startsWith("/sdcard/")
+            val normalizedAbs = trimmed.replace('\\', '/')
+            if (normalizedAbs.split('/').any { it == ".." }) return false
+            return normalizedAbs.startsWith("/data/data/com.termux/files/") ||
+                normalizedAbs.startsWith("/data/data/com.agy.os/files/") ||
+                normalizedAbs.startsWith("/storage/") ||
+                normalizedAbs.startsWith("/sdcard/")
         }
 
         val entryParts = ArrayDeque<String>()
@@ -168,9 +170,7 @@ object BackupRestoreEngine {
     fun resolveTarBinary(): File {
         val termuxTar = File("${AntigravityEngine.PREFIX_DIR}/bin/tar")
         if (termuxTar.isFile) return termuxTar
-        val systemTar = File("/system/bin/tar")
-        if (systemTar.isFile) return systemTar
-        throw IllegalStateException("tar binary not found in embedded Linux environment")
+        throw IllegalStateException("GNU tar binary not found in embedded Linux environment")
     }
 
     fun findDownloadBackups(): List<File> {
@@ -235,7 +235,7 @@ object BackupRestoreEngine {
 
             val filesRoot = File(AntigravityEngine.FILES_DIR).apply { mkdirs() }
             val availBytes = runCatching { StatFs(filesRoot.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
-            val requiredBytes = (totalBytes * 2L).coerceAtLeast(MIN_RESTORE_FREE_BYTES)
+            val requiredBytes = (totalBytes * 4L).coerceAtLeast(MIN_RESTORE_FREE_BYTES)
             if (availBytes < requiredBytes) {
                 val availMb = availBytes / (1024.0 * 1024.0)
                 val reqMb = requiredBytes / (1024.0 * 1024.0)
@@ -444,6 +444,7 @@ object BackupRestoreEngine {
             }
         }
         AntigravityEngine.provisionBridgeAssets(context)
+        AntigravityBackgroundController.restartFileObserver(context)
     }
 
     suspend fun createBackup(

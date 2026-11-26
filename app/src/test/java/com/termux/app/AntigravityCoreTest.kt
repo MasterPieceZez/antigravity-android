@@ -92,7 +92,19 @@ class AntigravityCoreTest {
         assertTrue(BackupRestoreEngine.isSafeArchiveLinkTarget("./home/storage/shared", "/storage/emulated/0"))
         assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "../../etc/passwd"))
         assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "/etc/passwd"))
+        assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "/storage/../../etc/passwd"))
+        assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "/data/data/com.agy.os/../shared_prefs/p"))
         assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "../secret", isHardLink = true))
         assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "/data/data/com.agy.os/files/usr/bin/sh", isHardLink = true))
+    }
+
+    @Test
+    fun trustedHubUri_requiresLoopbackAndHubPort() {
+        assertTrue(AntigravityFileHelper.isTrustedHubUri("http://localhost:4400/#t=abc"))
+        assertTrue(AntigravityFileHelper.isTrustedHubUri("http://127.0.0.1:4400/"))
+        assertFalse(AntigravityFileHelper.isTrustedHubUri("http://localhost:3000/"))
+        assertFalse(AntigravityFileHelper.isTrustedHubUri("http://127.0.0.1:8080/"))
+        assertFalse(AntigravityFileHelper.isTrustedHubUri("file://localhost:4400/etc/passwd"))
+        assertFalse(AntigravityFileHelper.isTrustedHubUri("https://evil.example.com:4400/"))
     }
 }

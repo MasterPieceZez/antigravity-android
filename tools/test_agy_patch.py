@@ -96,6 +96,16 @@ def main() -> int:
     assert out_tf.extractfile("usr/share/doc/readme.gz").read() == gz_payload
     assert out_tf.extractfile("usr/share/icon.bin").read() == png_payload
 
+    # 3b. --tar preserves PAX long-path compressed files
+    pax_gz_buf = io.BytesIO()
+    long_gz_name = "usr/share/doc/" + ("sub_" * 28) + "readme.gz"
+    with tarfile.open(fileobj=pax_gz_buf, mode="w", format=tarfile.PAX_FORMAT) as tf:
+        add_tar_bytes(tf, long_gz_name, gz_payload)
+    res = run_patcher(bin_path, ["--tar"], pax_gz_buf.getvalue())
+    assert res.returncode == 0, res.stderr
+    out_pax_tf = tarfile.open(fileobj=io.BytesIO(res.stdout), mode="r:")
+    assert out_pax_tf.extractfile(long_gz_name).read() == gz_payload
+
     # 4. --check-tar accepts safe entries and safe symlinks
     safe_buf = io.BytesIO()
     with tarfile.open(fileobj=safe_buf, mode="w", format=tarfile.PAX_FORMAT) as tf:
@@ -115,6 +125,9 @@ def main() -> int:
         make_raw_ustar_header(b"usr/evil", typeflag=b"2", linkname=b"/etc/passwd") + b"\0" * 1024,
         make_raw_ustar_header(b"usr/evil", typeflag=b"1", linkname=b"/etc/passwd") + b"\0" * 1024,
         make_raw_ustar_header(b"usr/evil", typeflag=b"1", linkname=b"../secret") + b"\0" * 1024,
+        make_raw_ustar_header(b"usr/evil", typeflag=b"2", linkname=b"/storage/../../etc/passwd") + b"\0" * 1024,
+        make_raw_ustar_header(b"usr/evil", typeflag=b"2", linkname=b"/data/data/com.agy.os/../shared_prefs/p") + b"\0" * 1024,
+        make_raw_ustar_header(b"usr/pax", typeflag=b"x", size=44) + b"99999999999999999999999999999999999 path=ok\n".ljust(512, b"\0") + b"\0" * 1024,
         b"\0" * 1024,
     ]
     pax_buf = io.BytesIO()

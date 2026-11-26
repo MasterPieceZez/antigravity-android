@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -47,7 +48,14 @@ class LocalBridgeServer(
                 ).apply { reuseAddress = true }
                 serverSocket = ss
                 while (isActive && !ss.isClosed) {
-                    val client = runCatching { ss.accept() }.getOrNull() ?: break
+                    val client = try {
+                        ss.accept()
+                    } catch (e: Exception) {
+                        if (!isActive || ss.isClosed) break
+                        Logger.logDebug("LocalBridgeServer", "Accept error: ${e.message}")
+                        delay(100L)
+                        continue
+                    }
                     launch {
                         clientSemaphore.withPermit {
                             runCatching { handleClient(client) }
@@ -101,22 +109,28 @@ class LocalBridgeServer(
                 }
             }
 
+            val reqOrigin = headers["origin"]
             // Origin validation
-            if (!isAllowedOrigin(headers["origin"])) {
+            if (!isAllowedOrigin(reqOrigin)) {
                 writeJson(out, 403, JSONObject().put("ok", false).put("error", "forbidden_origin"))
+                return
+            }
+
+            if (method == "OPTIONS") {
+                writeCorsPreflight(out, reqOrigin)
                 return
             }
 
             // Constant-time X-Bridge-Token check
             val expectedToken = AntigravityEngine.getOrCreateBridgeToken()
             if (!isValidToken(headers["x-bridge-token"], expectedToken)) {
-                writeJson(out, 403, JSONObject().put("ok", false).put("error", "unauthorized"))
+                writeJson(out, 403, JSONObject().put("ok", false).put("error", "unauthorized"), reqOrigin)
                 return
             }
 
             val transferEncoding = headers["transfer-encoding"]?.lowercase()
             if (transferEncoding != null && transferEncoding.contains("chunked")) {
-                writeJson(out, 501, JSONObject().put("ok", false).put("error", "chunked_unsupported"))
+                writeJson(out, 501, JSONObject().put("ok", false).put("error", "chunked_unsupported"), reqOrigin)
                 return
             }
 
@@ -124,11 +138,11 @@ class LocalBridgeServer(
             val contentLength = if (rawLength != null) {
                 val parsed = rawLength.toIntOrNull()
                 if (parsed == null || parsed < 0) {
-                    writeJson(out, 400, JSONObject().put("ok", false).put("error", "invalid_content_length"))
+                    writeJson(out, 400, JSONObject().put("ok", false).put("error", "invalid_content_length"), reqOrigin)
                     return
                 }
                 if (parsed > MAX_BODY_BYTES) {
-                    writeJson(out, 413, JSONObject().put("ok", false).put("error", "payload_too_large"))
+                    writeJson(out, 413, JSONObject().put("ok", false).put("error", "payload_too_large"), reqOrigin)
                     return
                 }
                 parsed
@@ -136,25 +150,30 @@ class LocalBridgeServer(
                 0
             }
             val bodyBytes = if (contentLength > 0) readExact(input, contentLength) else ByteArray(0)
+            if (bodyBytes.size < contentLength) {
+                writeJson(out, 400, JSONObject().put("ok", false).put("error", "truncated_body"), reqOrigin)
+                return
+            }
 
             when {
                 method == "GET" && route == "/health" -> {
                     val hubUrl = AntigravityEngine.parseHubUrlFromLog()
                     val hubReady = hubUrl != null && AntigravityEngine.isPortOpen(AntigravityEngine.HUB_PORT)
+                    AntigravityEngine.setHubListeningCached(hubReady)
                     val payload = JSONObject()
                         .put("bridge", true)
                         .put("agy_installed", AntigravityEngine.isAgyInstalled())
                         .put("hub_ready", hubReady)
                         .put("hub_url", hubUrl ?: JSONObject.NULL)
                         .put("auto_update_disabled", true)
-                    writeJson(out, 200, payload)
+                    writeJson(out, 200, payload, reqOrigin)
                 }
                 method == "POST" && route == "/restart-agy" -> {
                     val newUrl = AntigravityEngine.restartHub(context)
                     val payload = JSONObject()
                         .put("ok", newUrl != null)
                         .put("hub_url", newUrl ?: JSONObject.NULL)
-                    writeJson(out, if (newUrl != null) 200 else 503, payload)
+                    writeJson(out, if (newUrl != null) 200 else 503, payload, reqOrigin)
                 }
                 method == "POST" && route == "/notify" -> {
                     val json = runCatching { JSONObject(bodyBytes.toString(Charsets.UTF_8)) }
@@ -162,10 +181,10 @@ class LocalBridgeServer(
                     val title = json.optString("title", "Antigravity").take(120).ifBlank { "Antigravity" }
                     val body = json.optString("body", "Agent task finished").take(500).ifBlank { "Agent task finished" }
                     onNotify(title, body)
-                    writeJson(out, 200, JSONObject().put("ok", true))
+                    writeJson(out, 200, JSONObject().put("ok", true), reqOrigin)
                 }
                 else -> {
-                    writeJson(out, 404, JSONObject().put("ok", false).put("error", "not_found"))
+                    writeJson(out, 404, JSONObject().put("ok", false).put("error", "not_found"), reqOrigin)
                 }
             }
         }
@@ -202,7 +221,21 @@ class LocalBridgeServer(
         return if (offset == len) buf else buf.copyOf(offset)
     }
 
-    private fun writeJson(out: java.io.OutputStream, status: Int, json: JSONObject) {
+    private fun writeCorsPreflight(out: java.io.OutputStream, origin: String?) {
+        val sb = StringBuilder("HTTP/1.1 204 No Content\r\n")
+        if (!origin.isNullOrBlank()) {
+            sb.append("Access-Control-Allow-Origin: ").append(origin).append("\r\n")
+            sb.append("Vary: Origin\r\n")
+        }
+        sb.append("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n")
+        sb.append("Access-Control-Allow-Headers: X-Bridge-Token, Content-Type\r\n")
+        sb.append("Access-Control-Max-Age: 600\r\n")
+        sb.append("Connection: close\r\n\r\n")
+        out.write(sb.toString().toByteArray(Charsets.US_ASCII))
+        out.flush()
+    }
+
+    private fun writeJson(out: java.io.OutputStream, status: Int, json: JSONObject, origin: String? = null) {
         val body = json.toString().toByteArray(Charsets.UTF_8)
         val reason = when (status) {
             200 -> "OK"
@@ -213,12 +246,17 @@ class LocalBridgeServer(
             501 -> "Not Implemented"
             else -> "Service Unavailable"
         }
-        val resp = "HTTP/1.1 $status $reason\r\n" +
-            "Content-Type: application/json; charset=utf-8\r\n" +
-            "Content-Length: ${body.size}\r\n" +
-            "Cache-Control: no-store\r\n" +
-            "Connection: close\r\n\r\n"
-        out.write(resp.toByteArray(Charsets.US_ASCII))
+        val sb = StringBuilder()
+        sb.append("HTTP/1.1 ").append(status).append(' ').append(reason).append("\r\n")
+        sb.append("Content-Type: application/json; charset=utf-8\r\n")
+        sb.append("Content-Length: ").append(body.size).append("\r\n")
+        if (!origin.isNullOrBlank()) {
+            sb.append("Access-Control-Allow-Origin: ").append(origin).append("\r\n")
+            sb.append("Vary: Origin\r\n")
+        }
+        sb.append("Cache-Control: no-store\r\n")
+        sb.append("Connection: close\r\n\r\n")
+        out.write(sb.toString().toByteArray(Charsets.US_ASCII))
         out.write(body)
         out.flush()
     }

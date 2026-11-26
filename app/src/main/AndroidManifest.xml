@@ -53,7 +53,7 @@
 
         <activity
             android:name=".app.AntigravityMainActivity"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|smallestScreenSize|uiMode|density"
             android:exported="true"
             android:label="@string/antigravity_app_name"
             android:launchMode="singleTask"
@@ -74,12 +74,16 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/*" />
                 <data android:mimeType="image/*" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="video/*" />
                 <data android:mimeType="application/*" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="image/*" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="video/*" />
                 <data android:mimeType="application/*" />
             </intent-filter>
         </activity>
@@ -153,6 +157,7 @@
 
         <activity-alias
             android:name=".app.api.file.FileViewReceiverActivity"
+            android:enabled="false"
             android:exported="true"
             android:targetActivity=".app.api.file.FileReceiverActivity">
             <intent-filter tools:ignore="AppLinkUrlError">

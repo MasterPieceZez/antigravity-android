@@ -81,9 +81,12 @@ static int ends_with_ci(const char *str, const char *suffix) {
 static int has_binary_or_compressed_ext(const char *path) {
     static const char *const exts[] = {
         ".gz", ".tgz", ".xz", ".txz", ".bz2", ".tbz2",
-        ".zst", ".tzst", ".lz4", ".zip", ".deb", ".whl",
-        ".jar", ".apk", ".pyc", ".png", ".jpg", ".jpeg",
-        ".webp", ".gif", ".sqlite", ".sqlite3", ".db"
+        ".zst", ".tzst", ".lz4", ".7z", ".rar", ".tar",
+        ".zip", ".deb", ".whl", ".jar", ".apk", ".pyc",
+        ".png", ".jpg", ".jpeg", ".webp", ".gif",
+        ".sqlite", ".sqlite3", ".db", ".ldb", ".sst",
+        ".wasm", ".node", ".asar", ".pdf", ".woff2", ".otf", ".ttf",
+        ".mp3", ".mp4"
     };
     size_t count = sizeof(exts) / sizeof(exts[0]);
     for (size_t i = 0; i < count; i++) {
@@ -98,12 +101,17 @@ static int has_compressed_or_binary_magic(const uint8_t *buf, size_t len) {
         buf[3] == 'X' && buf[4] == 'Z' && buf[5] == 0x00) return 1; /* xz */
     if (len >= 4 && buf[0] == 0x28 && buf[1] == 0xb5 &&
         buf[2] == 0x2f && buf[3] == 0xfd) return 1; /* zstd */
+    if (len >= 6 && buf[0] == '7' && buf[1] == 'z' && buf[2] == 0xbc &&
+        buf[3] == 0xaf && buf[4] == 0x27 && buf[5] == 0x1c) return 1; /* 7z */
     if (len >= 4 && buf[0] == 'P' && buf[1] == 'K' &&
         buf[2] == 0x03 && buf[3] == 0x04) return 1; /* zip/jar/apk/whl */
     if (len >= 3 && buf[0] == 'B' && buf[1] == 'Z' && buf[2] == 'h') return 1; /* bzip2 */
     if (len >= 8 && buf[0] == 0x89 && buf[1] == 'P' && buf[2] == 'N' &&
         buf[3] == 'G' && buf[4] == '\r' && buf[5] == '\n' &&
         buf[6] == 0x1a && buf[7] == '\n') return 1; /* png */
+    if (len >= 5 && memcmp(buf, "%PDF-", 5) == 0) return 1; /* pdf */
+    if (len >= 4 && memcmp(buf, "wOF2", 4) == 0) return 1; /* woff2 */
+    if (len >= 4 && buf[0] == 0x00 && buf[1] == 'a' && buf[2] == 's' && buf[3] == 'm') return 1; /* wasm */
     if (len >= 16 && memcmp(buf, "SQLite format 3\0", 16) == 0) return 1; /* sqlite */
     return 0;
 }
@@ -235,11 +243,21 @@ static int stream_patch_ex(FILE *in, FILE *out, int has_limit, uint64_t limit_by
     return 0;
 }
 
+static int parse_pax_records(const char *buf, size_t len,
+                             char *pax_path, size_t path_cap, int *has_path,
+                             char *pax_link, size_t link_cap, int *has_link,
+                             int reject_path_keys);
+
 static int mode_tar(void) {
     uint8_t hdr[512];
     char gnu_longname[MAX_TAR_PATH];
+    char pax_path[MAX_TAR_PATH];
+    char pax_link_unused[MAX_TAR_PATH];
     int has_gnu_longname = 0;
+    int has_pax_path = 0;
+    int has_pax_link_unused = 0;
     gnu_longname[0] = '\0';
+    pax_path[0] = '\0';
 
     for (;;) {
         int rc = read_exact(stdin, hdr, 512);
@@ -255,7 +273,9 @@ static int mode_tar(void) {
         uint64_t size = parse_tar_size(hdr + 124);
 
         char entry_path[MAX_TAR_PATH];
-        if (has_gnu_longname) {
+        if (has_pax_path) {
+            snprintf(entry_path, sizeof(entry_path), "%s", pax_path);
+        } else if (has_gnu_longname) {
             snprintf(entry_path, sizeof(entry_path), "%s", gnu_longname);
         } else {
             build_ustar_path(hdr, entry_path, sizeof(entry_path));
@@ -275,6 +295,15 @@ static int mode_tar(void) {
             patch_buffer_inplace((uint8_t *)gnu_longname, (size_t)size);
             if (write_exact(stdout, (const uint8_t *)gnu_longname, (size_t)size) != 0) return 1;
             has_gnu_longname = 1;
+        } else if (typeflag == 'x' && size > 0 && size < MAX_TAR_PATH) {
+            char meta[MAX_TAR_PATH];
+            if (read_exact(stdin, (uint8_t *)meta, (size_t)size) != 1) return 1;
+            meta[size] = '\0';
+            (void)parse_pax_records(meta, (size_t)size,
+                                    pax_path, sizeof(pax_path), &has_pax_path,
+                                    pax_link_unused, sizeof(pax_link_unused), &has_pax_link_unused, 0);
+            patch_buffer_inplace((uint8_t *)meta, (size_t)size);
+            if (write_exact(stdout, (const uint8_t *)meta, (size_t)size) != 0) return 1;
         } else if (size > 0) {
             int skip_patch = 0;
             int detect_magic = 0;
@@ -296,7 +325,10 @@ static int mode_tar(void) {
 
         if (!is_meta) {
             has_gnu_longname = 0;
+            has_pax_path = 0;
+            has_pax_link_unused = 0;
             gnu_longname[0] = '\0';
+            pax_path[0] = '\0';
         }
     }
     fflush(stdout);
@@ -336,8 +368,9 @@ static int is_safe_symlink_target(const char *entry_path, const char *target) {
         if (uc < 0x20 || *c == '\\') return 0;
     }
     if (target[0] == '/') {
-        return starts_with(target, "/data/data/com.termux/") ||
-               starts_with(target, "/data/data/com.agy.os/") ||
+        if (!is_safe_rel_path(target + 1)) return 0;
+        return starts_with(target, "/data/data/com.termux/files/") ||
+               starts_with(target, "/data/data/com.agy.os/files/") ||
                starts_with(target, "/storage/") ||
                starts_with(target, "/sdcard/");
     }
@@ -382,7 +415,9 @@ static int parse_pax_records(const char *buf, size_t len,
         size_t rec_len = 0;
         size_t p = pos;
         while (p < len && buf[p] >= '0' && buf[p] <= '9') {
-            rec_len = rec_len * 10 + (size_t)(buf[p] - '0');
+            size_t d = (size_t)(buf[p] - '0');
+            if (rec_len > (len - pos) / 10 + 1) return -1;
+            rec_len = rec_len * 10 + d;
             p++;
         }
         if (p == pos || p >= len || buf[p] != ' ' || rec_len < 4 || pos + rec_len > len) {
@@ -435,6 +470,10 @@ static int mode_check_tar(void) {
 
         uint8_t typeflag = hdr[156];
         uint64_t size = parse_tar_size(hdr + 124);
+        if (size > UINT64_MAX - 512) {
+            fprintf(stderr, "Oversized tar entry\n");
+            return 1;
+        }
         size_t pad = size > 0 ? (size_t)((512 - (size % 512)) % 512) : 0;
 
         if (typeflag == 'L' || typeflag == 'K' || typeflag == 'x' || typeflag == 'g') {

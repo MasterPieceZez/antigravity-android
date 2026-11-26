@@ -16,6 +16,7 @@ android {
 
     dependencies {
         implementation "androidx.annotation:annotation:1.9.0"
+        implementation "androidx.browser:browser:1.8.0"
         implementation "androidx.core:core:1.13.1"
         implementation "androidx.core:core-ktx:1.13.1"
         implementation "androidx.activity:activity-ktx:1.9.3"
@@ -41,8 +42,8 @@ android {
         applicationId "com.agy.os"
         minSdkVersion project.properties.minSdkVersion.toInteger()
         targetSdkVersion project.properties.targetSdkVersion.toInteger()
-        versionCode 101
-        versionName "1.0.1"
+        versionCode 102
+        versionName "1.0.2"
 
         buildConfigField "String", "TERMUX_PACKAGE_VARIANT", "\"" + project.ext.packageVariant + "\""
         buildConfigField "boolean", "AGY_LITE_UPDATE", project.ext.liteUpdate.toString()
@@ -269,6 +270,8 @@ def downloadBootstrap(String arch, String expectedChecksum, String version) {
         origFile.parentFile.mkdirs()
         def out = new BufferedOutputStream(new FileOutputStream(origFile))
         def connection = new URL(remoteUrl).openConnection()
+        connection.setConnectTimeout(15000)
+        connection.setReadTimeout(60000)
         connection.setRequestProperty("User-Agent", "AntigravityAndroid-Build/1.0")
         connection.setInstanceFollowRedirects(true)
         def digestStream = new java.security.DigestInputStream(connection.inputStream, digest)

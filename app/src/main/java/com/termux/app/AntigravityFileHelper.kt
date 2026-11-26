@@ -85,8 +85,21 @@ object AntigravityFileHelper {
 
     fun isLocalhostUri(url: String?): Boolean {
         if (url.isNullOrBlank()) return false
-        val host = runCatching { Uri.parse(url).host?.lowercase() }.getOrNull() ?: return false
+        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
+        val scheme = uri.scheme?.lowercase() ?: return false
+        if (scheme != "http" && scheme != "https") return false
+        val host = uri.host?.lowercase() ?: return false
         return host == "localhost" || host == "127.0.0.1"
+    }
+
+    fun isTrustedHubUri(url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
+        val scheme = uri.scheme?.lowercase() ?: return false
+        if (scheme != "http" && scheme != "https") return false
+        val host = uri.host?.lowercase() ?: return false
+        if (host != "localhost" && host != "127.0.0.1") return false
+        return uri.port == AntigravityEngine.HUB_PORT
     }
 
     /**
@@ -166,7 +179,16 @@ object AntigravityFileHelper {
                 values.clear()
                 values.put(MediaStore.Downloads.IS_PENDING, 0)
                 resolver.update(uri, values, null, null)
-                Result.success("Download/$safeName")
+                val actualName = resolver.query(
+                    uri,
+                    arrayOf(MediaStore.Downloads.DISPLAY_NAME),
+                    null,
+                    null,
+                    null
+                )?.use { c ->
+                    if (c.moveToFirst()) c.getString(0)?.ifBlank { null } else null
+                } ?: safeName
+                Result.success("Download/$actualName")
             } catch (e: Exception) {
                 insertedUri?.let { runCatching { context.contentResolver.delete(it, null, null) } }
                 Result.failure(e)

@@ -59,10 +59,12 @@ if [ -f "$AGY_BIN" ]; then
     fi
 
     if ! pgrep -f "[/]agy --hub" >/dev/null 2>&1; then
+        rm -f "$BRIDGE_DIR/hub.url" 2>/dev/null || true
         if [ -f "$AGY_LOG" ] && [ -s "$AGY_LOG" ]; then
             mv -f "$AGY_LOG" "$AGY_LOG.prev" 2>/dev/null || true
         fi
         : > "$AGY_LOG"
         nohup "$AGY_BIN" --hub --hub-port=4400 > "$AGY_LOG" 2>&1 < /dev/null &
+        printf '%s\n' "$!" > "$BRIDGE_DIR/hub.pid" 2>/dev/null || true
     fi
 fi

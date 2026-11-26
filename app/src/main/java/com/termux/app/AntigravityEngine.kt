@@ -48,6 +48,8 @@ object AntigravityEngine {
     const val BRIDGE_DIR = "$HOME_DIR/.agy_bridge"
     const val AGY_BIN = "$HOME_DIR/.local/bin/agy"
     const val AGY_LOG = "$BRIDGE_DIR/agy.log"
+    const val HUB_URL_FILE = "$BRIDGE_DIR/hub.url"
+    const val HUB_PID_FILE = "$BRIDGE_DIR/hub.pid"
     const val NOTIFY_FILE = "$BRIDGE_DIR/pending_notify.json"
     const val TOKEN_FILE = "$BRIDGE_DIR/bridge.token"
     const val BASH_BIN = "$PREFIX_DIR/bin/bash"
@@ -61,6 +63,8 @@ object AntigravityEngine {
     private val installInProgress = AtomicBoolean(false)
     @Volatile
     private var cachedBridgeToken: String? = null
+    @Volatile
+    private var cachedHubListening: Boolean = false
     private val HUB_URL_REGEX = Regex("https?://(?:localhost|127\\.0\\.0\\.1):4400/#t=[A-Za-z0-9._-]+")
 
 
@@ -71,7 +75,15 @@ object AntigravityEngine {
     fun isInstallRunning(): Boolean = installInProgress.get()
 
     @JvmStatic
-    fun isHubPortListening(): Boolean = isPortOpen(HUB_PORT)
+    fun isHubListeningCached(): Boolean = cachedHubListening
+
+    @JvmStatic
+    fun setHubListeningCached(listening: Boolean) {
+        cachedHubListening = listening
+    }
+
+    @JvmStatic
+    fun isHubPortListening(): Boolean = isPortOpen(HUB_PORT).also { cachedHubListening = it }
 
     fun isDeviceAbiSupportedByAgy(): Boolean {
         val primary = Build.SUPPORTED_ABIS.firstOrNull() ?: return true
@@ -137,7 +149,8 @@ object AntigravityEngine {
             val storageDir = File("$HOME_DIR/storage")
             if (!storageDir.exists()) storageDir.mkdirs()
             val sharedLink = File(storageDir, "shared")
-            if (!sharedLink.exists()) {
+            val sharedLinkExists = runCatching { Os.lstat(sharedLink.absolutePath); true }.getOrDefault(false)
+            if (!sharedLinkExists) {
                 runCatching { Os.symlink("/storage/emulated/0", sharedLink.absolutePath) }
             }
 
@@ -165,7 +178,7 @@ object AntigravityEngine {
             if (patchSo.isFile) {
                 runCatching {
                     val tmpLink = File(bridgeDir, "agy_patch.tmp")
-                    if (tmpLink.exists()) tmpLink.delete()
+                    runCatching { Os.remove(tmpLink.absolutePath) }
                     Os.symlink(patchSo.absolutePath, tmpLink.absolutePath)
                     tmpLink.renameTo(patchLink)
                 }
@@ -222,8 +235,11 @@ object AntigravityEngine {
             conn.instanceFollowRedirects = false
             val code = conn.responseCode
             conn.disconnect()
-            code in 100..499
+            val ready = code in 100..499
+            cachedHubListening = ready
+            ready
         } catch (_: Exception) {
+            cachedHubListening = false
             false
         }
     }
@@ -344,10 +360,47 @@ object AntigravityEngine {
         }
     }
 
+    fun readLogHead(maxBytes: Int = 32768): String {
+        val logFile = File(AGY_LOG)
+        if (!logFile.isFile) return ""
+        return try {
+            RandomAccessFile(logFile, "r").use { raf ->
+                val toRead = minOf(raf.length(), maxBytes.toLong()).toInt()
+                val buf = ByteArray(toRead)
+                raf.readFully(buf)
+                String(buf, Charsets.UTF_8)
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
     fun parseHubUrlFromLog(): String? {
+        val urlFile = File(HUB_URL_FILE)
+        if (urlFile.isFile) {
+            val persisted = runCatching { urlFile.readText().trim() }.getOrNull()
+            val valid = persisted?.let { parseHubUrlFromText(it) }
+            if (valid != null) return valid
+        }
         val tail = readLogTail(65536)
-        if (tail.isEmpty()) return null
-        return parseHubUrlFromText(tail)
+        val fromTail = if (tail.isNotEmpty()) parseHubUrlFromText(tail) else null
+        val resolved = fromTail ?: run {
+            val head = readLogHead(32768)
+            if (head.isNotEmpty()) parseHubUrlFromText(head) else null
+        }
+        if (resolved != null) {
+            persistHubUrl(resolved)
+        }
+        return resolved
+    }
+
+    private fun persistHubUrl(url: String) {
+        runCatching {
+            val file = File(HUB_URL_FILE)
+            file.parentFile?.mkdirs()
+            file.writeText(url)
+            Os.chmod(file.absolutePath, 0b110000000) // 0600
+        }
     }
 
     fun consumePendingNotification(): PendingNotification? {
@@ -475,7 +528,7 @@ object AntigravityEngine {
             if (!isDeviceAbiSupportedByAgy()) {
                 val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"
                 return@withContext Result.failure(
-                    IllegalStateException("Unsupported device ABI ($abi). Google Antigravity CLI requires a 64-bit arm64-v8a Android device.")
+                    IllegalStateException("Unsupported device ABI ($abi). Google Antigravity CLI requires a 64-bit arm64-v8a or x86_64 Android device.")
                 )
             }
             provisionBridgeAssets(context)
@@ -487,7 +540,10 @@ object AntigravityEngine {
                 dpkg --configure -a >/dev/null 2>&1 || true
                 apt-get update -y
                 apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" curl ca-certificates
-                curl -fsSL https://antigravity.google/cli/install.sh | bash
+                INSTALL_SH="${'$'}TMPDIR/agy_install.sh"
+                trap 'rm -f "${'$'}INSTALL_SH"' EXIT
+                curl -fsSL --proto '=https' --tlsv1.2 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh
+                bash "${'$'}INSTALL_SH"
             """.trimIndent()
             val pb = ProcessBuilder(BASH_BIN, "-c", script)
             pb.directory(File(HOME_DIR))
@@ -525,16 +581,39 @@ object AntigravityEngine {
 
     @JvmStatic
     fun stopBackgroundProcesses() {
+        cachedHubListening = false
+        runCatching { File(HUB_URL_FILE).delete() }
+        val pidFile = File(HUB_PID_FILE)
+        val recordedPid = runCatching { pidFile.takeIf { it.isFile }?.readText()?.trim()?.toIntOrNull() }.getOrNull()
+        runCatching { pidFile.delete() }
+        if (recordedPid != null && recordedPid > 0) {
+            runCatching { Os.kill(recordedPid, 15) } // SIGTERM
+        }
         val pkill = File("$PREFIX_DIR/bin/pkill")
         val env = buildTermuxEnv()
         if (pkill.isFile) {
-            for (pattern in listOf("agy --hub", "bridge_server.py")) {
+            for (pattern in listOf("[/]agy --hub", "bridge_server.py")) {
                 runCatching {
                     val pb = ProcessBuilder(pkill.absolutePath, "-f", pattern)
                     pb.environment().putAll(env)
                     pb.start().waitFor()
                 }
             }
+            val deadline = System.currentTimeMillis() + 800L
+            while (System.currentTimeMillis() < deadline && isPortOpen(HUB_PORT, 100)) {
+                Thread.sleep(100)
+            }
+            if (isPortOpen(HUB_PORT, 100)) {
+                if (recordedPid != null && recordedPid > 0) {
+                    runCatching { Os.kill(recordedPid, 9) } // SIGKILL
+                }
+                runCatching {
+                    val pb = ProcessBuilder(pkill.absolutePath, "-9", "-f", "[/]agy --hub")
+                    pb.environment().putAll(env)
+                    pb.start().waitFor()
+                }
+            }
         }
+        cachedHubListening = false
     }
 }

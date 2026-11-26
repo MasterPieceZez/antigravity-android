@@ -120,6 +120,9 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         runStartForeground();
 
         SystemEventReceiver.registerPackageUpdateEvents(this);
+        AntigravityBackgroundController.setHubStateListener(() -> mHandler.post(() -> {
+            if (!mWantsToStop) updateNotification();
+        }));
         AntigravityBackgroundController.start(this);
     }
 
@@ -170,7 +173,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
     public void onDestroy() {
         Logger.logVerbose(LOG_TAG, "onDestroy");
 
-        if (mWantsToStop || !AntigravityEngine.isHubPortListening()) {
+        if (mWantsToStop || !AntigravityEngine.isHubListeningCached()) {
             TermuxShellUtils.clearTermuxTMPDIR(true);
         }
 
@@ -180,6 +183,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
         TermuxShellManager.onAppExit(this);
 
+        AntigravityBackgroundController.setHubStateListener(null);
         AntigravityBackgroundController.stop();
         SystemEventReceiver.unregisterPackageUpdateEvents(this);
 
@@ -799,7 +803,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         // Set notification text
         int sessionCount = getTermuxSessionsSize();
         int taskCount = mShellManager.mTermuxTasks.size();
-        boolean hubAlive = AntigravityEngine.isHubPortListening();
+        boolean hubAlive = AntigravityEngine.isHubListeningCached();
         String notificationText;
         if (hubAlive && sessionCount == 0 && taskCount == 0) {
             notificationText = "Hub active";
@@ -864,7 +868,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
     /** Update the shown foreground service notification after making any changes that affect it. */
     private synchronized void updateNotification() {
-        if (mWakeLock == null && mShellManager.mTermuxSessions.isEmpty() && mShellManager.mTermuxTasks.isEmpty() && !AntigravityEngine.isHubPortListening()) {
+        if (mWakeLock == null && mShellManager.mTermuxSessions.isEmpty() && mShellManager.mTermuxTasks.isEmpty() && !AntigravityEngine.isHubListeningCached()) {
             // Exit if we are updating after the user disabled all locks with no sessions, tasks, or Hub running.
             requestStopService();
         } else {

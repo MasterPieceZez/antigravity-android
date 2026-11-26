@@ -40,7 +40,7 @@ if [ "$HAS_DEB" -eq 0 ] || [ ! -x "$PATCH_BIN" ]; then
 fi
 
 WORK=$(mktemp -d "${TMPDIR:-$PREFIX/tmp}/agydpkg.XXXXXX")
-trap 'rm -rf "$WORK"' EXIT
+trap 'chmod -R u+rwX "$WORK" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
 NEW_ARGS=()
 IDX=0
@@ -61,7 +61,7 @@ for arg in "$@"; do
                 if [ -f "$PKG_DIR/DEBIAN/md5sums" ] && command -v md5sum >/dev/null 2>&1; then
                     (
                         cd "$PKG_DIR"
-                        LC_ALL=C find . -type f ! -path './DEBIAN/*' -print | LC_ALL=C sort | xargs -r md5sum | sed 's|  \./|  |'
+                        LC_ALL=C find . -type f ! -path './DEBIAN/*' -print0 | LC_ALL=C sort -z | xargs -0 -r md5sum | sed 's|  \./|  |'
                     ) > "$PKG_DIR/DEBIAN/md5sums"
                 fi
                 dpkg-deb -Znone -b "$PKG_DIR" "$OUT_DEB" >/dev/null

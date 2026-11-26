@@ -22,10 +22,53 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup java 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Setup Android SDK & NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0 ndk;29.0.14206865'
+
+      - name: Cross-compile libzstd_cli.so and libagy_patch.so (64-bit ABIs)
+        run: |
+          NDK_BIN="$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          STRIP="$NDK_BIN/llvm-strip"
+          curl -fsSL -o /tmp/zstd.tar.gz "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz"
+          echo "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3  /tmp/zstd.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/zstd.tar.gz -C /tmp
+          cd /tmp/zstd-1.5.7
+
+          build_zstd() {
+            local abi="$1"
+            local cc="$2"
+            "$cc" -O2 -fPIE -pie -pthread -DZSTD_MULTITHREAD -DZSTD_NOBENCH -DZSTD_NODICT -DZSTD_DISABLE_ASM \
+              -Ilib -Ilib/common -Ilib/compress -Ilib/decompress -Iprograms \
+              lib/common/*.c lib/compress/*.c lib/decompress/*.c \
+              programs/zstdcli.c programs/zstdcli_trace.c programs/util.c programs/timefn.c programs/fileio.c programs/fileio_asyncio.c \
+              -o "/tmp/libzstd_cli_${abi}.so"
+            "$STRIP" "/tmp/libzstd_cli_${abi}.so"
+            mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/${abi}"
+            cp "/tmp/libzstd_cli_${abi}.so" "$GITHUB_WORKSPACE/app/src/main/jniLibs/${abi}/libzstd_cli.so"
+          }
+
+          build_zstd "arm64-v8a" "$NDK_BIN/aarch64-linux-android24-clang"
+          build_zstd "x86_64" "$NDK_BIN/x86_64-linux-android24-clang"
+
+          build_patcher() {
+            local abi="$1"
+            local cc="$2"
+            "$cc" -O2 -std=c11 -Wall -Wextra -Werror -fPIE -pie \
+              "$GITHUB_WORKSPACE/tools/agy_patch.c" \
+              -o "/tmp/libagy_patch_${abi}.so"
+            "$STRIP" "/tmp/libagy_patch_${abi}.so"
+            cp "/tmp/libagy_patch_${abi}.so" "$GITHUB_WORKSPACE/app/src/main/jniLibs/${abi}/libagy_patch.so"
+          }
+
+          build_patcher "arm64-v8a" "$NDK_BIN/aarch64-linux-android24-clang"
+          build_patcher "x86_64" "$NDK_BIN/x86_64-linux-android24-clang"
 
       - name: Build APKs
         shell: bash {0}

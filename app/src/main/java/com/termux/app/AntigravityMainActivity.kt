@@ -31,6 +31,7 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.URLUtil
@@ -50,6 +51,7 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.bottomsheet.BottomSheetDialog
@@ -118,6 +120,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     @Volatile
     private var currentWebUrl: String? = null
     private var isHubReconnectInFlight = false
+    private var isBootInFlight = false
     private var lastBackPressedMs = 0L
     private var pillCollapsed = false
     private var pillRestored = false
@@ -364,12 +367,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     }
 
     private inner class WebNotificationBridge {
-        private fun isTrustedOrigin(): Boolean = AntigravityFileHelper.isLocalhostUri(currentWebUrl)
-
         @JavascriptInterface
         fun notify(title: String?, body: String?) {
-            if (!isTrustedOrigin()) return
             runOnUiThread {
+                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@runOnUiThread
                 showAgentDoneNotification(
                     title = title?.takeIf { it.isNotBlank() } ?: "Antigravity",
                     body = body?.takeIf { it.isNotBlank() } ?: "Agent task finished",
@@ -380,8 +381,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         @JavascriptInterface
         fun onAgentJobFinished(summary: String?) {
-            if (!isTrustedOrigin()) return
             runOnUiThread {
+                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@runOnUiThread
                 showAgentDoneNotification(
                     title = "Antigravity",
                     body = summary?.takeIf { it.isNotBlank() } ?: "Agent finished its task",
@@ -392,15 +393,16 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         @JavascriptInterface
         fun saveDownloadedBase64(filename: String?, base64Data: String?) {
-            if (!isTrustedOrigin() || base64Data.isNullOrBlank()) return
-            lifecycleScope.launch(Dispatchers.IO) {
-                val res = AntigravityFileHelper.saveBase64ToDownloads(this@AntigravityMainActivity, filename, base64Data)
-                withContext(Dispatchers.Main) {
-                    res.onSuccess { displayPath ->
-                        Toast.makeText(this@AntigravityMainActivity, "Saved to $displayPath", Toast.LENGTH_LONG).show()
-                    }.onFailure { err ->
-                        Toast.makeText(this@AntigravityMainActivity, "Download failed: ${err.message}", Toast.LENGTH_LONG).show()
-                    }
+            if (base64Data.isNullOrBlank()) return
+            lifecycleScope.launch {
+                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@launch
+                val res = withContext(Dispatchers.IO) {
+                    AntigravityFileHelper.saveBase64ToDownloads(this@AntigravityMainActivity, filename, base64Data)
+                }
+                res.onSuccess { displayPath ->
+                    Toast.makeText(this@AntigravityMainActivity, "Saved to $displayPath", Toast.LENGTH_LONG).show()
+                }.onFailure { err ->
+                    Toast.makeText(this@AntigravityMainActivity, "Download failed: ${err.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -429,6 +431,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
                 var busySince = 0;
                 var idleTimer = null;
+                var checkScheduled = false;
                 var lastNotifAt = 0;
 
                 function isAgentBusy() {
@@ -436,16 +439,16 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     var btns = document.querySelectorAll('button, [role="button"]');
                     for (var i = 0; i < btns.length; i++) {
                         var b = btns[i];
-                        if (!b.offsetParent) continue;
-                        var label = ((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('title') || '') + ' ' + (b.innerText || '')).trim().toLowerCase();
+                        var label = ((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('title') || '') + ' ' + (b.textContent || '')).trim().toLowerCase();
                         if (label === 'stop' || label.indexOf('stop generating') !== -1 || label.indexOf('stop agent') !== -1 || label.indexOf('stop response') !== -1) {
-                            return true;
+                            if (b.offsetParent !== null) return true;
                         }
                     }
                     return false;
                 }
 
                 function checkState() {
+                    checkScheduled = false;
                     var busy = isAgentBusy();
                     var now = Date.now();
                     if (busy) {
@@ -470,10 +473,17 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     }
                 }
 
-                var observer = new MutationObserver(checkState);
+                function scheduleCheck() {
+                    if (!checkScheduled) {
+                        checkScheduled = true;
+                        setTimeout(checkState, 300);
+                    }
+                }
+
+                var observer = new MutationObserver(scheduleCheck);
                 function attachObserver() {
                     if (document.body) {
-                        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-busy', 'aria-label', 'title', 'disabled', 'class'] });
+                        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-busy', 'aria-label', 'title', 'disabled'] });
                     } else {
                         setTimeout(attachObserver, 500);
                     }
@@ -553,6 +563,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 val js = """
                     (function() {
                         fetch($qUrl).then(function(r){ return r.blob(); }).then(function(b){
+                            if (b.size > 25 * 1024 * 1024) {
+                                return;
+                            }
                             var fr = new FileReader();
                             fr.onloadend = function() {
                                 if (window.AntigravityAndroid && fr.result) {
@@ -565,6 +578,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 """.trimIndent()
                 webView.evaluateJavascript(js, null)
             } else if (AntigravityFileHelper.isLocalhostUri(url)) {
+                val cookie = runCatching { CookieManager.getInstance().getCookie(url) }.getOrNull()
                 lifecycleScope.launch(Dispatchers.IO) {
                     var conn: java.net.HttpURLConnection? = null
                     val saveResult = runCatching {
@@ -572,6 +586,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                             connectTimeout = 5000
                             readTimeout = 15000
                             setRequestProperty("User-Agent", userAgent)
+                            if (!cookie.isNullOrBlank()) setRequestProperty("Cookie", cookie)
                         }
                         val status = conn!!.responseCode
                         if (status !in 200..299) {
@@ -618,20 +633,17 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
-                val host = uri.host?.lowercase(Locale.US) ?: ""
-                if (host == "localhost" || host == "127.0.0.1") {
+                if (AntigravityFileHelper.isTrustedHubUri(uri.toString())) {
                     return false
                 }
-                runCatching {
-                    startActivity(Intent(Intent.ACTION_VIEW, uri))
-                }
+                openExternalUri(uri)
                 return true
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 currentWebUrl = url
-                if (AntigravityFileHelper.isLocalhostUri(url)) {
+                if (AntigravityFileHelper.isTrustedHubUri(url)) {
                     reconnectBanner.visibility = View.GONE
                     injectAgentNotificationBridge()
                 }
@@ -646,7 +658,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 resultMsg: Message?
             ): Boolean {
                 val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
-                val tempWebView = WebView(this@AntigravityMainActivity)
+                val tempWebView = WebView(this@AntigravityMainActivity).apply {
+                    settings.javaScriptEnabled = true
+                }
                 var destroyed = false
                 fun cleanupTemp() {
                     if (!destroyed) {
@@ -659,19 +673,19 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 }
                 tempWebView.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(v: WebView?, request: WebResourceRequest?): Boolean {
-                        val uri = request?.url ?: run { cleanupTemp(); return true }
-                        if (AntigravityFileHelper.isLocalhostUri(uri.toString())) {
+                        val uri = request?.url ?: run { v?.post { cleanupTemp() }; return true }
+                        if (AntigravityFileHelper.isTrustedHubUri(uri.toString())) {
                             webView.loadUrl(uri.toString())
                         } else {
-                            runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+                            openExternalUri(uri)
                         }
-                        cleanupTemp()
+                        v?.post { cleanupTemp() }
                         return true
                     }
 
                     override fun onPageFinished(v: WebView?, url: String?) {
                         if (!url.isNullOrBlank() && url != "about:blank") {
-                            cleanupTemp()
+                            v?.post { cleanupTemp() }
                         }
                     }
                 }
@@ -683,8 +697,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             override fun onPermissionRequest(request: PermissionRequest?) {
                 if (request == null) return
                 runOnUiThread {
-                    val host = request.origin?.host?.lowercase(Locale.US) ?: ""
-                    if (host != "localhost" && host != "127.0.0.1") {
+                    if (!AntigravityFileHelper.isTrustedHubUri(request.origin?.toString())) {
                         runCatching { request.deny() }
                         return@runOnUiThread
                     }
@@ -959,6 +972,37 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         pillCollapsed = prefs.getBoolean(KEY_PILL_COLLAPSED, false)
         pillControlsBtn.visibility = if (pillCollapsed) View.GONE else View.VISIBLE
         pillCollapseBtn.text = if (pillCollapsed) "‹" else "›"
+
+        rootView.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            val oldW = oldRight - oldLeft
+            val oldH = oldBottom - oldTop
+            val newW = right - left
+            val newH = bottom - top
+            if ((oldW != newW || oldH != newH) && newW > 0 && newH > 0 && floatingPill.visibility == View.VISIBLE) {
+                floatingPill.post {
+                    val margin = 10 * resources.displayMetrics.density
+                    val maxY = (rootView.height - floatingPill.height - margin).coerceAtLeast(margin)
+                    val curYFrac = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(KEY_PILL_Y_FRAC, 0.5f)
+                    floatingPill.y = (curYFrac * rootView.height).coerceIn(margin, maxY)
+                    snapPillToEdge(savePos = false)
+                }
+            }
+        }
+    }
+
+    private fun openExternalUri(uri: Uri) {
+        val scheme = uri.scheme?.lowercase(Locale.US)
+        if (scheme == "http" || scheme == "https") {
+            val customTabs = runCatching {
+                CustomTabsIntent.Builder()
+                    .setShowTitle(true)
+                    .build()
+            }.getOrNull()
+            if (customTabs != null && runCatching { customTabs.launchUrl(this, uri) }.isSuccess) {
+                return
+            }
+        }
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
     }
 
     private fun restorePillPositionIfNeeded() {
@@ -1091,7 +1135,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         termuxService = (service as TermuxService.LocalBinder).service
         if (!bootstrapComplete) {
             runBootstrapSequence()
-        } else {
+        } else if (terminalContainer.visibility == View.VISIBLE) {
             ensureBackgroundTerminalSession()
         }
     }
@@ -1110,7 +1154,6 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         TermuxInstaller.setupBootstrapIfNeeded(this) {
             if (isFinishing || isDestroyed) return@setupBootstrapIfNeeded
             bootstrapComplete = true
-            ensureBackgroundTerminalSession()
             lifecycleScope.launch {
                 withContext(Dispatchers.IO) {
                     AntigravityEngine.provisionBridgeAssets(this@AntigravityMainActivity)
@@ -1188,11 +1231,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             if (AntigravityEngine.isAgyInstalled()) {
                 bootAntigravityHub()
             }
-        } else if (bootstrapComplete && webView.visibility == View.VISIBLE && !BackupRestoreEngine.isBusy() && !isHubReconnectInFlight) {
+        } else if (bootstrapComplete && webView.visibility == View.VISIBLE && !BackupRestoreEngine.isBusy() && !isHubReconnectInFlight && !isBootInFlight) {
             isHubReconnectInFlight = true
             lifecycleScope.launch {
                 try {
-                    val alive = withContext(Dispatchers.IO) { AntigravityEngine.isPortOpen(AntigravityEngine.HUB_PORT) }
+                    val alive = withContext(Dispatchers.IO) { AntigravityEngine.isHubHttpReady() }
                     if (!alive && AntigravityEngine.isAgyInstalled()) {
                         txtReconnectBanner.text = "Reconnecting to Antigravity Hub..."
                         reconnectBanner.visibility = View.VISIBLE
@@ -1201,7 +1244,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                         if (newUrl != null) {
                             currentHubUrl = newUrl
                             reconnectBanner.visibility = View.GONE
-                            webView.loadUrl(newUrl)
+                            if (webView.url.isNullOrBlank() || webView.url != newUrl) {
+                                webView.loadUrl(newUrl)
+                            } else {
+                                webView.reload()
+                            }
                         } else {
                             txtReconnectBanner.text = "Hub offline — tap Control Center to restart"
                         }
@@ -1298,6 +1345,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     }
 
     private fun bootAntigravityHub() {
+        if (isBootInFlight) return
+        isBootInFlight = true
         onboardingContainer.visibility = View.GONE
         setupContainer.visibility = View.GONE
         splashContainer.visibility = View.VISIBLE
@@ -1305,27 +1354,31 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         splashStatus.text = "Starting Antigravity Hub (port 4400)..."
 
         lifecycleScope.launch {
-            AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
-            val hubUrl = AntigravityEngine.pollForHubUrl(20000L)
-            if (isFinishing || isDestroyed) return@launch
-            if (hubUrl != null) {
-                currentHubUrl = hubUrl
-                splashContainer.visibility = View.GONE
-                splashActions.visibility = View.GONE
-                webView.visibility = View.VISIBLE
-                floatingPill.visibility = View.VISIBLE
-                restorePillPositionIfNeeded()
-                webView.loadUrl(hubUrl)
-            } else {
-                splashStatus.text = "Antigravity Hub did not respond on port 4400.\nCheck logs, retry, or open the terminal."
-                splashActions.visibility = View.VISIBLE
-                floatingPill.visibility = View.VISIBLE
-                restorePillPositionIfNeeded()
-                Toast.makeText(
-                    this@AntigravityMainActivity,
-                    "Hub startup timed out — check Control Center or Built-in Terminal",
-                    Toast.LENGTH_LONG
-                ).show()
+            try {
+                AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
+                val hubUrl = AntigravityEngine.pollForHubUrl(20000L)
+                if (isFinishing || isDestroyed) return@launch
+                if (hubUrl != null) {
+                    currentHubUrl = hubUrl
+                    splashContainer.visibility = View.GONE
+                    splashActions.visibility = View.GONE
+                    webView.visibility = View.VISIBLE
+                    floatingPill.visibility = View.VISIBLE
+                    restorePillPositionIfNeeded()
+                    webView.loadUrl(hubUrl)
+                } else {
+                    splashStatus.text = "Antigravity Hub did not respond on port 4400.\nCheck logs, retry, or open the terminal."
+                    splashActions.visibility = View.VISIBLE
+                    floatingPill.visibility = View.VISIBLE
+                    restorePillPositionIfNeeded()
+                    Toast.makeText(
+                        this@AntigravityMainActivity,
+                        "Hub startup timed out — check Control Center or Built-in Terminal",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            } finally {
+                isBootInFlight = false
             }
         }
     }
@@ -1573,10 +1626,13 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 mode = mode
             ) { pct, msg ->
                 runOnUiThread {
-                    progressBar.progress = pct
-                    statusText.text = msg
+                    if (!isFinishing && !isDestroyed) {
+                        progressBar.progress = pct
+                        statusText.text = msg
+                    }
                 }
             }
+            if (isFinishing || isDestroyed) return@launch
             result.onSuccess { outFile ->
                 val mb = outFile.length() / (1024.0 * 1024.0)
                 Toast.makeText(
@@ -1636,8 +1692,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 archiveFile = archiveFile
             ) { pct, msg ->
                 runOnUiThread {
-                    progressBar.progress = pct
-                    statusView.text = msg
+                    if (!isFinishing && !isDestroyed) {
+                        progressBar.progress = pct
+                        statusView.text = msg
+                    }
                 }
             }
             result.onSuccess {
