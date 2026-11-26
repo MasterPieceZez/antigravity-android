@@ -32,21 +32,61 @@ if [ ! -e "$HOME/storage/shared" ]; then
 fi
 
 # Stop any legacy Python bridge daemon (now handled natively in Kotlin)
-pkill -f "bridge_server.py" >/dev/null 2>&1 || true
+if command -v pkill >/dev/null 2>&1; then
+    pkill -f "bridge_server.py" >/dev/null 2>&1 || true
+fi
+
+is_lock_stale() {
+    local old_pid
+    old_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+    if [ -n "$old_pid" ]; then
+        if ! kill -0 "$old_pid" 2>/dev/null; then
+            return 0
+        fi
+        return 1
+    fi
+    # Missing/empty pid file: treat lock as stale if older than 15 seconds
+    local now mtime
+    now=$(date +%s 2>/dev/null || echo 0)
+    mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)
+    if [ "$now" -gt 0 ] && [ "$mtime" -gt 0 ] && [ $((now - mtime)) -ge 15 ]; then
+        return 0
+    fi
+    return 1
+}
+
+is_hub_running() {
+    if command -v pgrep >/dev/null 2>&1; then
+        if pgrep -f "[/]agy --hub" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    local hub_pid
+    hub_pid=$(cat "$BRIDGE_DIR/hub.pid" 2>/dev/null || true)
+    if [ -n "$hub_pid" ] && kill -0 "$hub_pid" 2>/dev/null; then
+        if [ -r "/proc/$hub_pid/cmdline" ]; then
+            if tr '\0' ' ' < "/proc/$hub_pid/cmdline" 2>/dev/null | grep -q -- "--hub"; then
+                return 0
+            fi
+        else
+            return 0
+        fi
+    fi
+    return 1
+}
 
 # Start Antigravity Hub if installed and not already running (serialize concurrent launches)
 if [ -f "$AGY_BIN" ]; then
     chmod +x "$AGY_BIN" 2>/dev/null || true
 
     ACQUIRED=0
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
         if mkdir "$LOCK_DIR" 2>/dev/null; then
             printf '%s\n' "$$" > "$LOCK_DIR/pid" 2>/dev/null || true
             ACQUIRED=1
             break
         fi
-        OLD_PID=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
-        if [ -n "$OLD_PID" ] && ! kill -0 "$OLD_PID" 2>/dev/null; then
+        if is_lock_stale; then
             rm -rf "$LOCK_DIR" 2>/dev/null || true
             continue
         fi
@@ -59,7 +99,7 @@ if [ -f "$AGY_BIN" ]; then
         exit 0
     fi
 
-    if ! pgrep -f "[/]agy --hub" >/dev/null 2>&1; then
+    if ! is_hub_running; then
         rm -f "$BRIDGE_DIR/hub.url" 2>/dev/null || true
         if [ -f "$AGY_LOG" ] && [ -s "$AGY_LOG" ]; then
             mv -f "$AGY_LOG" "$AGY_LOG.prev" 2>/dev/null || true

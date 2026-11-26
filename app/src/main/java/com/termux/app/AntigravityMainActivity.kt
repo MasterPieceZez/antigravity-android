@@ -51,6 +51,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import org.json.JSONObject
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.termux.BuildConfig
 import com.termux.R
@@ -110,7 +113,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private var lastRenderCrashMs = 0L
     private var renderCrashCount = 0
     private var pendingTerminalRestore = false
-    private val accountManager = AntigravityAccountManager()
+    private val accountManager = AntigravityAccountManager(cipher = AndroidKeystoreCredentialCipher())
     @Volatile
     private var isSwitchingAccount = false
     @Volatile
@@ -210,7 +213,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         handleIncomingShareIntent(intent)
 
         val serviceIntent = Intent(this, TermuxService::class.java)
-        runCatching { startService(serviceIntent) }
+        runCatching { ContextCompat.startForegroundService(this, serviceIntent) }
         bindService(serviceIntent, this, Context.BIND_AUTO_CREATE)
 
         if (prefs.getBoolean(KEY_CPU_WAKELOCK, false)) {
@@ -303,7 +306,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private fun applyCpuWakeLock(enabled: Boolean) {
         val action = if (enabled) TERMUX_SERVICE.ACTION_WAKE_LOCK else TERMUX_SERVICE.ACTION_WAKE_UNLOCK
         val intent = Intent(this, TermuxService::class.java).setAction(action)
-        runCatching { startService(intent) }
+        runCatching { ContextCompat.startForegroundService(this, intent) }
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -422,8 +425,6 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         }
         val settings = webView.settings
         settings.cacheMode = WebSettings.LOAD_DEFAULT
-        @Suppress("DEPRECATION")
-        settings.setRenderPriority(WebSettings.RenderPriority.HIGH)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             settings.offscreenPreRaster = true
         }
@@ -439,7 +440,58 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         settings.setSupportMultipleWindows(true)
         settings.javaScriptCanOpenWindowsAutomatically = true
 
-        webView.addJavascriptInterface(WebNotificationBridge(), "AntigravityAndroid")
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            val allowedOrigins = setOf(
+                "http://localhost:${AntigravityEngine.HUB_PORT}",
+                "http://127.0.0.1:${AntigravityEngine.HUB_PORT}"
+            )
+            WebViewCompat.addWebMessageListener(webView, "AntigravityBridge", allowedOrigins) { _, message, sourceOrigin, isMainFrame, _ ->
+                if (!isMainFrame || !AntigravityFileHelper.isTrustedHubUri(sourceOrigin.toString())) return@addWebMessageListener
+                val raw = message.data ?: return@addWebMessageListener
+                val json = runCatching { JSONObject(raw) }.getOrNull() ?: return@addWebMessageListener
+                when (json.optString("action")) {
+                    "notify" -> runOnUiThread {
+                        showAgentDoneNotification(
+                            title = json.optString("title", "Antigravity").ifBlank { "Antigravity" },
+                            body = json.optString("body", "Agent task finished").ifBlank { "Agent task finished" },
+                            force = false
+                        )
+                    }
+                    "agent_done" -> runOnUiThread {
+                        showAgentDoneNotification(
+                            title = "Antigravity",
+                            body = json.optString("summary", "Agent finished its task").ifBlank { "Agent finished its task" },
+                            force = false
+                        )
+                    }
+                    "save_base64" -> {
+                        val fname = json.optString("filename", "download")
+                        val b64 = json.optString("data", "")
+                        if (b64.isNotBlank()) {
+                            lifecycleScope.launch {
+                                val res = withContext(Dispatchers.IO) {
+                                    AntigravityFileHelper.saveBase64ToDownloads(this@AntigravityMainActivity, fname, b64)
+                                }
+                                res.onSuccess { displayPath ->
+                                    Toast.makeText(this@AntigravityMainActivity, "Saved to $displayPath", Toast.LENGTH_LONG).show()
+                                }.onFailure { err ->
+                                    Toast.makeText(this@AntigravityMainActivity, "Download failed: ${err.message}", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    }
+                    "download_too_large" -> runOnUiThread {
+                        Toast.makeText(this@AntigravityMainActivity, "Blob download exceeds 25 MB limit", Toast.LENGTH_LONG).show()
+                    }
+                    "quota_exhausted" -> {
+                        val reason = json.optString("reason", "quota_exhausted")
+                        runOnUiThread { handleQuotaExhaustedSignal(reason) }
+                    }
+                }
+            }
+        } else {
+            webView.addJavascriptInterface(WebNotificationBridge(), "AntigravityAndroid")
+        }
 
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             val guessedName = URLUtil.guessFileName(url, contentDisposition, mimeType)
@@ -534,6 +586,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 view?.let {
                     it.stopLoading()
                     it.webChromeClient = null
+                    if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                        runCatching { WebViewCompat.removeWebMessageListener(it, "AntigravityBridge") }
+                    }
                     it.removeJavascriptInterface("AntigravityAndroid")
                     parent?.removeView(it)
                     it.destroy()
@@ -1237,7 +1292,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         lifecycleScope.launch {
             try {
-                withContext(Dispatchers.IO) {
+                // Stop Hub first so it cannot re-write active tokens while we snapshot & clear them
+                AntigravityEngine.stopBackgroundProcessesSuspend()
+                val previousAccount = withContext(Dispatchers.IO) {
                     accountManager.prepareForNewAccountLogin()
                 }
                 runCatching {
@@ -1246,6 +1303,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     cm.flush()
                 }
                 val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity)
+                if (isFinishing || isDestroyed) return@launch
                 if (newUrl != null) {
                     currentHubUrl = newUrl
                     splashContainer.visibility = View.GONE
@@ -1254,8 +1312,17 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     webView.loadUrl(newUrl)
                     Toast.makeText(this@AntigravityMainActivity, "Sign in with your next Google account", Toast.LENGTH_LONG).show()
                 } else {
+                    if (previousAccount != null) {
+                        withContext(Dispatchers.IO) {
+                            accountManager.switchToAccount(previousAccount.id, clearCooldown = false)
+                        }
+                    }
                     reconnectBanner.visibility = View.GONE
-                    Toast.makeText(this@AntigravityMainActivity, "Failed to restart Hub for login", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        this@AntigravityMainActivity,
+                        "Failed to restart Hub for login — check Hub Logs in Control Center",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             } finally {
                 isSwitchingAccount = false
@@ -1457,6 +1524,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (isFinishing) {
+            AntigravityEngine.cancelInstall()
+        }
         runCatching { unregisterReceiver(serviceStoppedReceiver) }
         fileUploadCallback?.onReceiveValue(null)
         fileUploadCallback = null
@@ -1467,6 +1537,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         runCatching {
             webView.stopLoading()
             webView.webChromeClient = null
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                runCatching { WebViewCompat.removeWebMessageListener(webView, "AntigravityBridge") }
+            }
             webView.removeJavascriptInterface("AntigravityAndroid")
             (webView.parent as? ViewGroup)?.removeView(webView)
             webView.destroy()

@@ -5,7 +5,9 @@ import android.os.Build
 import android.system.Os
 import com.termux.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -68,6 +70,7 @@ object AntigravityEngine {
     @Volatile
     private var cachedHubListening: Boolean = false
     private val HUB_URL_REGEX = Regex("https?://(?:localhost|127\\.0\\.0\\.1):4400/#t=[A-Za-z0-9._-]+")
+    private val HUB_BASE_URL_REGEX = Regex("https?://(?:localhost|127\\.0\\.0\\.1):4400(?:/[^\\s\"'<>]*)?")
 
 
     fun isBootstrapReady(): Boolean = File(BASH_BIN).exists()
@@ -207,7 +210,12 @@ object AntigravityEngine {
                             // Real binary (initial install or overwritten by `apt upgrade dpkg`)
                             if (dpkgReal.exists()) dpkgReal.delete()
                             if (dpkgBin.renameTo(dpkgReal)) {
-                                Os.symlink(dpkgWrapFile.absolutePath, dpkgBin.absolutePath)
+                                try {
+                                    Os.symlink(dpkgWrapFile.absolutePath, dpkgBin.absolutePath)
+                                } catch (e: Exception) {
+                                    runCatching { dpkgReal.renameTo(dpkgBin) }
+                                    throw e
+                                }
                             }
                         } else {
                             dpkgBin.delete()
@@ -492,29 +500,59 @@ object AntigravityEngine {
         }
     }
 
+    fun parseAnyHubUrlFromLog(): String? {
+        val tail = readLogTail(65536)
+        val fromTail = if (tail.isNotEmpty()) HUB_BASE_URL_REGEX.findAll(tail).lastOrNull()?.value else null
+        val resolved = fromTail ?: run {
+            val head = readLogHead(32768)
+            if (head.isNotEmpty()) HUB_BASE_URL_REGEX.findAll(head).lastOrNull()?.value else null
+        }
+        return resolved?.replace("127.0.0.1:4400", "localhost:4400")
+    }
+
     suspend fun pollForHubUrl(timeoutMs: Long = 20000L): String? = withContext(Dispatchers.IO) {
         val deadline = System.currentTimeMillis() + timeoutMs
+        var httpReadyWithoutTokenSince = 0L
         while (System.currentTimeMillis() < deadline) {
             val url = parseHubUrlFromLog()
-            if (url != null && isHubHttpReady()) {
+            val httpReady = isHubHttpReady()
+            if (url != null && httpReady) {
                 return@withContext url
+            }
+            if (httpReady) {
+                val now = System.currentTimeMillis()
+                if (httpReadyWithoutTokenSince == 0L) {
+                    httpReadyWithoutTokenSince = now
+                } else if (now - httpReadyWithoutTokenSince >= 4000L) {
+                    // Hub is actively serving HTTP on port 4400 without a #t= token (e.g., fresh unauthenticated login)
+                    return@withContext parseAnyHubUrlFromLog() ?: "http://localhost:$HUB_PORT/"
+                }
+            } else {
+                httpReadyWithoutTokenSince = 0L
             }
             delay(150L)
         }
         val fallback = parseHubUrlFromLog()
-        if (fallback != null && isHubHttpReady()) fallback else null
+        if (fallback != null && isHubHttpReady()) {
+            fallback
+        } else if (isHubHttpReady()) {
+            parseAnyHubUrlFromLog() ?: "http://localhost:$HUB_PORT/"
+        } else {
+            null
+        }
     }
 
     suspend fun restartHub(context: Context): String? = withContext(Dispatchers.IO) {
         restartMutex.withLock {
             stopBackgroundProcessesSuspend()
             delay(450L)
+            runCatching { File(HUB_URL_FILE).delete() }
             File(AGY_LOG).apply {
                 parentFile?.mkdirs()
                 writeText("")
             }
             startHubAndBridge(context)
-            pollForHubUrl(15000L)
+            pollForHubUrl(25000L)
         }
     }
 
@@ -548,6 +586,10 @@ object AntigravityEngine {
                 INSTALL_SH="${'$'}TMPDIR/agy_install.sh"
                 trap 'rm -f "${'$'}INSTALL_SH"' EXIT
                 curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 180 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh
+                if [ ! -s "${'$'}INSTALL_SH" ] || ! head -n 1 "${'$'}INSTALL_SH" | grep -q '^#!'; then
+                    echo "Downloaded installer script failed basic sanity check" >&2
+                    exit 1
+                fi
                 bash "${'$'}INSTALL_SH"
             """.trimIndent()
             val pb = ProcessBuilder(BASH_BIN, "-c", script)
@@ -581,9 +623,31 @@ object AntigravityEngine {
         } catch (e: Exception) {
             Result.failure(e)
         } finally {
-            activeInstallProcess.set(null)
+            activeInstallProcess.getAndSet(null)?.let { p ->
+                if (p.isAlive) runCatching { p.destroyForcibly() }
+            }
             installInProgress.set(false)
         }
+    }
+
+    private fun findMatchingHubPidsInProc(): List<Int> {
+        val selfPid = runCatching { Os.getpid() }.getOrDefault(-1)
+        val procDir = File("/proc")
+        val entries = procDir.listFiles() ?: return emptyList()
+        val matched = ArrayList<Int>()
+        for (entry in entries) {
+            val pid = entry.name.toIntOrNull() ?: continue
+            if (pid <= 1 || pid == selfPid) continue
+            val cmdline = runCatching {
+                File(entry, "cmdline").readBytes().toString(Charsets.UTF_8).replace(' ', ' ')
+            }.getOrNull() ?: continue
+            if ((cmdline.contains("/agy ") && cmdline.contains("--hub")) ||
+                cmdline.contains("bridge_server.py")
+            ) {
+                matched.add(pid)
+            }
+        }
+        return matched
     }
 
     private fun sendInitialStopSignals(): Pair<Int?, File> {
@@ -595,6 +659,10 @@ object AntigravityEngine {
         if (recordedPid != null && recordedPid > 0) {
             runCatching { Os.kill(-recordedPid, 15) } // SIGTERM process group
             runCatching { Os.kill(recordedPid, 15) } // SIGTERM
+        }
+        for (pid in findMatchingHubPidsInProc()) {
+            runCatching { Os.kill(-pid, 15) }
+            runCatching { Os.kill(pid, 15) }
         }
         val pkill = File("$PREFIX_DIR/bin/pkill")
         val env = buildTermuxEnv()
@@ -616,6 +684,10 @@ object AntigravityEngine {
                 runCatching { Os.kill(-recordedPid, 9) } // SIGKILL process group
                 runCatching { Os.kill(recordedPid, 9) } // SIGKILL
             }
+            for (pid in findMatchingHubPidsInProc()) {
+                runCatching { Os.kill(-pid, 9) }
+                runCatching { Os.kill(pid, 9) }
+            }
             if (pkill.isFile) {
                 val env = buildTermuxEnv()
                 runCatching {
@@ -630,28 +702,30 @@ object AntigravityEngine {
 
     suspend fun stopBackgroundProcessesSuspend() = withContext(Dispatchers.IO) {
         val (recordedPid, pkill) = sendInitialStopSignals()
-        if (pkill.isFile) {
-            val deadline = System.currentTimeMillis() + 800L
-            while (System.currentTimeMillis() < deadline && isPortOpen(HUB_PORT, 100)) {
-                delay(100L)
-            }
-            forceKillHubIfListening(recordedPid, pkill)
-        } else {
-            cachedHubListening = false
+        val deadline = System.currentTimeMillis() + 2500L
+        while (System.currentTimeMillis() < deadline && isPortOpen(HUB_PORT, 100)) {
+            delay(100L)
         }
+        forceKillHubIfListening(recordedPid, pkill)
+        val killDeadline = System.currentTimeMillis() + 1000L
+        while (System.currentTimeMillis() < killDeadline && isPortOpen(HUB_PORT, 100)) {
+            delay(100L)
+        }
+        cachedHubListening = false
     }
 
     @JvmStatic
     fun stopBackgroundProcesses() {
         val (recordedPid, pkill) = sendInitialStopSignals()
-        if (pkill.isFile) {
-            val deadline = System.currentTimeMillis() + 800L
-            while (System.currentTimeMillis() < deadline && isPortOpen(HUB_PORT, 100)) {
-                Thread.sleep(100)
-            }
-            forceKillHubIfListening(recordedPid, pkill)
-        } else {
-            cachedHubListening = false
+        val deadline = System.currentTimeMillis() + 2500L
+        while (System.currentTimeMillis() < deadline && isPortOpen(HUB_PORT, 100)) {
+            Thread.sleep(100)
         }
+        forceKillHubIfListening(recordedPid, pkill)
+        val killDeadline = System.currentTimeMillis() + 1000L
+        while (System.currentTimeMillis() < killDeadline && isPortOpen(HUB_PORT, 100)) {
+            Thread.sleep(100)
+        }
+        cachedHubListening = false
     }
 }

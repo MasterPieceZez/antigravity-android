@@ -5,6 +5,9 @@ import org.json.JSONObject
 /**
  * JavaScript snippets injected into the trusted Antigravity Hub WebView
  * for agent-completion notifications, quota exhaustion detection, and blob/data downloads.
+ *
+ * Prefers WebViewCompat's origin-scoped WebMessageListener (`window.AntigravityBridge`)
+ * and falls back to `window.AntigravityAndroid` only on legacy WebView implementations.
  */
 object AntigravityJsBridge {
 
@@ -13,12 +16,28 @@ object AntigravityJsBridge {
             if (window.__agyNotifBridgeInstalled) return;
             window.__agyNotifBridgeInstalled = true;
 
+            function sendNative(action, payload) {
+                try {
+                    if (window.AntigravityBridge && typeof window.AntigravityBridge.postMessage === 'function') {
+                        var msg = Object.assign({ action: action }, payload || {});
+                        window.AntigravityBridge.postMessage(JSON.stringify(msg));
+                        return;
+                    }
+                    if (!window.AntigravityAndroid) return;
+                    if (action === 'notify') {
+                        window.AntigravityAndroid.notify(String(payload.title || 'Antigravity'), String(payload.body || ''));
+                    } else if (action === 'agent_done') {
+                        window.AntigravityAndroid.onAgentJobFinished(String(payload.summary || 'Agent finished its task'));
+                    } else if (action === 'quota_exhausted' && typeof window.AntigravityAndroid.onQuotaExhausted === 'function') {
+                        window.AntigravityAndroid.onQuotaExhausted(String(payload.reason || 'quota_exhausted'));
+                    }
+                } catch (e) {}
+            }
+
             try {
                 function AgyNotification(title, options) {
                     var body = (options && options.body) ? String(options.body) : '';
-                    if (window.AntigravityAndroid) {
-                        window.AntigravityAndroid.notify(String(title || 'Antigravity'), body);
-                    }
+                    sendNative('notify', { title: String(title || 'Antigravity'), body: body });
                 }
                 AgyNotification.permission = 'granted';
                 AgyNotification.requestPermission = function(cb) {
@@ -60,9 +79,9 @@ object AntigravityJsBridge {
                             idleTimer = null;
                             if (!isAgentBusy() && busySince > 0) {
                                 busySince = 0;
-                                if (Date.now() - lastNotifAt > 5000 && window.AntigravityAndroid) {
+                                if (Date.now() - lastNotifAt > 5000) {
                                     lastNotifAt = Date.now();
-                                    window.AntigravityAndroid.onAgentJobFinished('Agent finished its task');
+                                    sendNative('agent_done', { summary: 'Agent finished its task' });
                                 }
                             }
                         }, 2200);
@@ -90,7 +109,8 @@ object AntigravityJsBridge {
             attachObserver();
             setInterval(checkState, 2000);
 
-            // Quota exhaustion detection (fetch, XHR, and visible error banners)
+            // Quota exhaustion detection strictly from failed network responses (fetch & XHR)
+            // to avoid false positives from chat text or rendered code snippets.
             var lastQuotaSignalAt = 0;
             function isQuotaText(txt) {
                 if (!txt) return false;
@@ -110,9 +130,7 @@ object AntigravityJsBridge {
                 var now = Date.now();
                 if (now - lastQuotaSignalAt < 15000) return;
                 lastQuotaSignalAt = now;
-                if (window.AntigravityAndroid && typeof window.AntigravityAndroid.onQuotaExhausted === 'function') {
-                    window.AntigravityAndroid.onQuotaExhausted(String(reason || 'quota_exhausted').slice(0, 240));
-                }
+                sendNative('quota_exhausted', { reason: String(reason || 'quota_exhausted').slice(0, 240) });
             }
 
             if (window.fetch && !window.__agyFetchWrapped) {
@@ -121,18 +139,23 @@ object AntigravityJsBridge {
                 window.fetch = function() {
                     return origFetch.apply(this, arguments).then(function(resp) {
                         try {
-                            if (resp && resp.status === 429) {
-                                resp.clone().text().then(function(body) {
-                                    if (!body || isQuotaText(body)) {
-                                        signalQuota(body || 'HTTP 429 rate limit');
-                                    }
-                                }).catch(function() {
+                            if (resp && (resp.status === 429 || (!resp.ok && resp.status >= 400))) {
+                                var cl = parseInt((resp.headers && resp.headers.get('content-length')) || '0', 10);
+                                if (!cl || cl <= 65536) {
+                                    resp.clone().text().then(function(body) {
+                                        if (resp.status === 429) {
+                                            if (!body || isQuotaText(body)) {
+                                                signalQuota(body || 'HTTP 429 rate limit');
+                                            }
+                                        } else if (isQuotaText(body)) {
+                                            signalQuota(body);
+                                        }
+                                    }).catch(function() {
+                                        if (resp.status === 429) signalQuota('HTTP 429 rate limit');
+                                    });
+                                } else if (resp.status === 429) {
                                     signalQuota('HTTP 429 rate limit');
-                                });
-                            } else if (resp && !resp.ok && resp.status >= 400) {
-                                resp.clone().text().then(function(body) {
-                                    if (isQuotaText(body)) signalQuota(body);
-                                }).catch(function() {});
+                                }
                             }
                         } catch (e) {}
                         return resp;
@@ -144,37 +167,24 @@ object AntigravityJsBridge {
                 window.__agyXhrWrapped = true;
                 var origOpen = XMLHttpRequest.prototype.open;
                 XMLHttpRequest.prototype.open = function() {
-                    this.addEventListener('load', function() {
-                        try {
-                            if (this.status === 429) {
-                                var txt429 = (typeof this.responseText === 'string') ? this.responseText : '';
-                                if (!txt429 || isQuotaText(txt429)) {
-                                    signalQuota(txt429 || 'XHR 429 rate limit');
+                    if (!this.__agyXhrTracked) {
+                        this.__agyXhrTracked = true;
+                        this.addEventListener('load', function() {
+                            try {
+                                if (this.status === 429) {
+                                    var txt429 = (typeof this.responseText === 'string') ? this.responseText : '';
+                                    if (!txt429 || isQuotaText(txt429)) {
+                                        signalQuota(txt429 || 'XHR 429 rate limit');
+                                    }
+                                } else if (this.status >= 400 && typeof this.responseText === 'string' && this.responseText.length <= 65536 && isQuotaText(this.responseText)) {
+                                    signalQuota(this.responseText);
                                 }
-                            } else if (this.status >= 400 && typeof this.responseText === 'string' && isQuotaText(this.responseText)) {
-                                signalQuota(this.responseText);
-                            }
-                        } catch (e) {}
-                    });
+                            } catch (e) {}
+                        });
+                    }
                     return origOpen.apply(this, arguments);
                 };
             }
-
-            setInterval(function() {
-                try {
-                    var alerts = document.querySelectorAll('[role="alert"], [class*="error"], [class*="quota"], [class*="banner"], [class*="toast"]');
-                    for (var i = 0; i < alerts.length; i++) {
-                        var el = alerts[i];
-                        if (el && el.offsetParent !== null) {
-                            var txt = (el.textContent || '').trim();
-                            if (txt.length > 0 && txt.length < 600 && isQuotaText(txt)) {
-                                signalQuota(txt);
-                                break;
-                            }
-                        }
-                    }
-                } catch (e) {}
-            }, 3000);
         })();
     """.trimIndent()
 
@@ -185,14 +195,23 @@ object AntigravityJsBridge {
             (function() {
                 fetch($qUrl).then(function(r){ return r.blob(); }).then(function(b){
                     if (b.size > 25 * 1024 * 1024) {
-                        if (window.AntigravityAndroid) {
+                        if (window.AntigravityBridge && typeof window.AntigravityBridge.postMessage === 'function') {
+                            window.AntigravityBridge.postMessage(JSON.stringify({ action: 'download_too_large' }));
+                        } else if (window.AntigravityAndroid) {
                             window.AntigravityAndroid.notifyDownloadTooLarge();
                         }
                         return;
                     }
                     var fr = new FileReader();
                     fr.onloadend = function() {
-                        if (window.AntigravityAndroid && fr.result) {
+                        if (!fr.result) return;
+                        if (window.AntigravityBridge && typeof window.AntigravityBridge.postMessage === 'function') {
+                            window.AntigravityBridge.postMessage(JSON.stringify({
+                                action: 'save_base64',
+                                filename: $qName,
+                                data: String(fr.result)
+                            }));
+                        } else if (window.AntigravityAndroid) {
                             window.AntigravityAndroid.saveDownloadedBase64($qName, String(fr.result));
                         }
                     };

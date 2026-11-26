@@ -1,9 +1,16 @@
 package com.termux.app
 
 import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import android.system.Os
 import java.io.File
+import java.security.KeyStore
 import java.security.MessageDigest
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 data class AccountProfile(
     val id: String,
@@ -22,9 +29,78 @@ data class AccountProfile(
  * Manages multiple Antigravity Google OAuth accounts for instant switching
  * and automatic failover when an account's quota is exhausted.
  */
+interface CredentialCipher {
+    fun encrypt(plain: ByteArray): ByteArray
+    fun decrypt(data: ByteArray): ByteArray
+}
+
+/**
+ * Encrypts saved multi-account OAuth snapshots with an Android Keystore AES-256-GCM key
+ * so shell processes sharing the app UID cannot read inactive account credentials in plaintext.
+ * Transparently reads legacy unencrypted snapshots for seamless upgrades.
+ */
+class AndroidKeystoreCredentialCipher(
+    private val keyAlias: String = "agy_account_snapshot_v1"
+) : CredentialCipher {
+    private fun getOrCreateKey(): SecretKey {
+        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (ks.getKey(keyAlias, null) as? SecretKey)?.let { return it }
+        val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        val spec = KeyGenParameterSpec.Builder(
+            keyAlias,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .build()
+        gen.init(spec)
+        return gen.generateKey()
+    }
+
+    override fun encrypt(plain: ByteArray): ByteArray {
+        return runCatching {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
+            val iv = cipher.iv
+            val ct = cipher.doFinal(plain)
+            val out = ByteArray(MAGIC.size + 1 + iv.size + ct.size)
+            System.arraycopy(MAGIC, 0, out, 0, MAGIC.size)
+            out[MAGIC.size] = iv.size.toByte()
+            System.arraycopy(iv, 0, out, MAGIC.size + 1, iv.size)
+            System.arraycopy(ct, 0, out, MAGIC.size + 1 + iv.size, ct.size)
+            out
+        }.getOrElse { plain }
+    }
+
+    override fun decrypt(data: ByteArray): ByteArray {
+        if (data.size <= MAGIC.size + 2) return data
+        for (i in MAGIC.indices) {
+            if (data[i] != MAGIC[i]) return data // Legacy plaintext snapshot
+        }
+        return runCatching {
+            val ivLen = data[MAGIC.size].toInt() and 0xFF
+            if (ivLen < 12 || data.size <= MAGIC.size + 1 + ivLen) return data
+            val iv = data.copyOfRange(MAGIC.size + 1, MAGIC.size + 1 + ivLen)
+            val ct = data.copyOfRange(MAGIC.size + 1 + ivLen, data.size)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(128, iv))
+            cipher.doFinal(ct)
+        }.getOrElse { data }
+    }
+
+    companion object {
+        private val MAGIC = byteArrayOf(
+            'A'.code.toByte(), 'G'.code.toByte(), 'Y'.code.toByte(), 'E'.code.toByte(),
+            'N'.code.toByte(), 'C'.code.toByte(), '1'.code.toByte(), 0
+        )
+    }
+}
+
 class AntigravityAccountManager(
     private val homeDir: File = File(AntigravityEngine.HOME_DIR),
-    private val accountsRoot: File = File(AntigravityEngine.BRIDGE_DIR, "accounts")
+    private val accountsRoot: File = File(AntigravityEngine.BRIDGE_DIR, "accounts"),
+    private val cipher: CredentialCipher? = null
 ) {
     private val lock = Any()
 
@@ -217,19 +293,21 @@ class AntigravityAccountManager(
         return updated
     }
 
-    private fun readEmailFromTokenFile(file: File): String? {
+    private fun readEmailFromTokenFile(file: File, encrypted: Boolean = false): String? {
         if (!file.isFile) return null
         return runCatching {
-            val content = file.readText()
-            EMAIL_JSON_REGEX.find(content)?.groupValues?.getOrNull(1)?.trim()?.ifBlank { null }
+            val rawBytes = file.readBytes()
+            val plainBytes = if (encrypted && cipher != null) cipher.decrypt(rawBytes) else rawBytes
+            val content = plainBytes.toString(Charsets.UTF_8)
+            EMAIL_JSON_REGEX.find(content)?.groupValues?.getOrNull(1)?.let { unescapeJson(it) }?.trim()?.ifBlank { null }
         }.getOrNull()
     }
 
     private fun readMeta(dir: File, fallbackId: String, fallbackEmail: String?): AccountProfile? {
         val metaFile = File(dir, FILE_META)
         if (!metaFile.isFile) {
-            val email = fallbackEmail ?: readEmailFromTokenFile(File(dir, FILE_PRIMARY_TOKEN))
-                ?: readEmailFromTokenFile(File(dir, FILE_JETSKI_TOKEN))
+            val email = fallbackEmail ?: readEmailFromTokenFile(File(dir, FILE_PRIMARY_TOKEN), encrypted = true)
+                ?: readEmailFromTokenFile(File(dir, FILE_JETSKI_TOKEN), encrypted = true)
                 ?: return null
             val now = System.currentTimeMillis()
             return AccountProfile(
@@ -272,9 +350,8 @@ class AntigravityAccountManager(
 
     private fun extractJsonString(raw: String, key: String): String? {
         val regex = Regex(""""${Regex.escape(key)}"\s*:\s*"((?:\\.|[^"\\])*)"""")
-        return regex.find(raw)?.groupValues?.getOrNull(1)
-            ?.replace("\\\"", "\"")
-            ?.replace("\\\\", "\\")
+        val rawVal = regex.find(raw)?.groupValues?.getOrNull(1) ?: return null
+        return unescapeJson(rawVal)
     }
 
     private fun extractJsonLong(raw: String, key: String): Long? {
@@ -283,19 +360,66 @@ class AntigravityAccountManager(
     }
 
     private fun escapeJson(value: String): String {
-        return value.replace("\\", "\\\\").replace("\"", "\\\"")
+        val sb = StringBuilder(value.length + 8)
+        for (ch in value) {
+            when (ch) {
+                '\\' -> sb.append("\\\\")
+                '"' -> sb.append("\\\"")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                else -> if (ch.code < 0x20) sb.append(String.format("\\u%04x", ch.code)) else sb.append(ch)
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun unescapeJson(raw: String): String {
+        val sb = StringBuilder(raw.length)
+        var i = 0
+        while (i < raw.length) {
+            val ch = raw[i]
+            if (ch == '\\' && i + 1 < raw.length) {
+                when (val next = raw[i + 1]) {
+                    '"' -> { sb.append('"'); i += 2 }
+                    '\\' -> { sb.append('\\'); i += 2 }
+                    '/' -> { sb.append('/'); i += 2 }
+                    'n' -> { sb.append('\n'); i += 2 }
+                    'r' -> { sb.append('\r'); i += 2 }
+                    't' -> { sb.append('\t'); i += 2 }
+                    'u' -> {
+                        if (i + 5 < raw.length) {
+                            val hex = raw.substring(i + 2, i + 6).toIntOrNull(16)
+                            if (hex != null) {
+                                sb.append(hex.toChar())
+                                i += 6
+                                continue
+                            }
+                        }
+                        sb.append(next); i += 2
+                    }
+                    else -> { sb.append(next); i += 2 }
+                }
+            } else {
+                sb.append(ch)
+                i++
+            }
+        }
+        return sb.toString()
     }
 
     private fun copyCredentialIfPresent(src: File, dst: File) {
         if (!src.isFile) return
         val bytes = runCatching { src.readBytes() }.getOrNull() ?: return
-        atomicWriteBytes(dst, bytes)
+        val out = cipher?.encrypt(bytes) ?: bytes
+        atomicWriteBytes(dst, out)
     }
 
     private fun replaceCredentialFile(src: File, dst: File) {
         if (src.isFile) {
             val bytes = runCatching { src.readBytes() }.getOrNull() ?: return
-            atomicWriteBytes(dst, bytes)
+            val plain = cipher?.decrypt(bytes) ?: bytes
+            atomicWriteBytes(dst, plain)
         } else {
             runCatching { dst.delete() }
         }

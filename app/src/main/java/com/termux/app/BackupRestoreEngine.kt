@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.StatFs
 import android.system.Os
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
@@ -357,11 +359,13 @@ object BackupRestoreEngine {
                 var bytesRead = 0L
                 var lastUpdate = 0L
                 val streamDigest = java.security.MessageDigest.getInstance("SHA-256")
-                runCatching {
+                var readFailure: Throwable? = null
+                try {
                     FileInputStream(archiveFile).use { fis ->
                         zp.outputStream.use { zIn ->
                             val buf = ByteArray(128 * 1024)
                             while (true) {
+                                currentCoroutineContext().ensureActive()
                                 val n = fis.read(buf)
                                 if (n <= 0) break
                                 streamDigest.update(buf, 0, n)
@@ -381,6 +385,10 @@ object BackupRestoreEngine {
                             zIn.flush()
                         }
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    readFailure = e
                 }
 
                 pipe1Thread.join()
@@ -393,6 +401,15 @@ object BackupRestoreEngine {
                 val patchExit = pp.waitFor()
                 val tarExit = tp.waitFor()
                 val actualSha = streamDigest.digest().joinToString("") { "%02x".format(it) }
+
+                if (readFailure != null && zstdExit == 0 && patchExit == 0 && tarExit == 0) {
+                    return Result.failure(readFailure)
+                }
+                if (readFailure != null && (zstdExit != 0 || patchExit != 0 || tarExit != 0)) {
+                    return Result.failure(
+                        IllegalStateException("Restore failed (zstd=$zstdExit, patch=$patchExit, tar=$tarExit): ${readFailure.message} $zstdErr $patchErr $tarLog".trim())
+                    )
+                }
 
                 if (actualSha != expectedSha) {
                     return Result.failure(SecurityException("Archive changed during restore (TOCTOU detected)"))
@@ -562,6 +579,14 @@ object BackupRestoreEngine {
         val outFile = if (canDirectDownloads) {
             val downloads = getDownloadsDir()
             if (!downloads.exists()) downloads.mkdirs()
+            val dlAvail = runCatching { StatFs(downloads.absolutePath).availableBytes }
+                .getOrDefault(Long.MAX_VALUE)
+            if (dlAvail < MIN_RESTORE_FREE_BYTES) {
+                operationInProgress.set(false)
+                return@withContext Result.failure(
+                    IllegalStateException("Not enough free storage in Downloads to create backup")
+                )
+            }
             AntigravityFileHelper.uniqueFile(downloads, baseFileName)
         } else {
             val cacheAvail = runCatching { StatFs(context.cacheDir.absolutePath).availableBytes }
@@ -574,6 +599,8 @@ object BackupRestoreEngine {
             }
             File(context.cacheDir, baseFileName)
         }
+        var tarProc: Process? = null
+        var zstdProc: Process? = null
         try {
             val zstd = resolveZstdBinary(context)
             val tar = resolveTarBinary()
@@ -616,11 +643,12 @@ object BackupRestoreEngine {
             )
             tarCmd.addAll(targets)
 
-            val tarProc = ProcessBuilder(tarCmd).apply {
+            val tp = ProcessBuilder(tarCmd).apply {
                 environment().putAll(env)
             }.start()
+            tarProc = tp
 
-            val zstdProc = ProcessBuilder(
+            val zp = ProcessBuilder(
                 zstd.absolutePath,
                 "-6", "-T2", "-f",
                 "-o", outFile.absolutePath
@@ -628,11 +656,12 @@ object BackupRestoreEngine {
                 environment().putAll(env)
                 redirectErrorStream(true)
             }.start()
+            zstdProc = zp
 
             val tarErr = StringBuilder()
             val tarErrThread = Thread {
                 runCatching {
-                    tarProc.errorStream.bufferedReader().forEachLine {
+                    tp.errorStream.bufferedReader().forEachLine {
                         if (tarErr.length < 2000) tarErr.append(it).append('\n')
                     }
                 }
@@ -641,7 +670,7 @@ object BackupRestoreEngine {
             val zstdOut = StringBuilder()
             val zstdOutThread = Thread {
                 runCatching {
-                    zstdProc.inputStream.bufferedReader().forEachLine {
+                    zp.inputStream.bufferedReader().forEachLine {
                         if (zstdOut.length < 2000) zstdOut.append(it).append('\n')
                     }
                 }
@@ -649,10 +678,11 @@ object BackupRestoreEngine {
 
             var streamedBytes = 0L
             var lastUpdate = 0L
-            tarProc.inputStream.use { tOut ->
-                zstdProc.outputStream.use { zIn ->
+            tp.inputStream.use { tOut ->
+                zp.outputStream.use { zIn ->
                     val buf = ByteArray(128 * 1024)
                     while (true) {
+                        currentCoroutineContext().ensureActive()
                         val n = tOut.read(buf)
                         if (n <= 0) break
                         zIn.write(buf, 0, n)
@@ -676,8 +706,8 @@ object BackupRestoreEngine {
             tarErrThread.join()
             zstdOutThread.join()
 
-            val tarExit = tarProc.waitFor()
-            val zstdExit = zstdProc.waitFor()
+            val tarExit = tp.waitFor()
+            val zstdExit = zp.waitFor()
             if (zstdExit != 0 || (tarExit != 0 && tarExit != 1)) {
                 runCatching { outFile.delete() }
                 return@withContext Result.failure(
@@ -709,10 +739,15 @@ object BackupRestoreEngine {
             }
             onProgress(100, String.format(Locale.US, "Verified: %s (%.1f MB)", displayLoc, finalMb))
             Result.success(BackupResult(displayLoc, finalBytes))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            runCatching { outFile.delete() }
+            throw e
         } catch (e: Exception) {
-            if (!canDirectDownloads) runCatching { outFile.delete() }
+            runCatching { outFile.delete() }
             Result.failure(e)
         } finally {
+            runCatching { tarProc?.destroyForcibly() }
+            runCatching { zstdProc?.destroyForcibly() }
             operationInProgress.set(false)
         }
     }

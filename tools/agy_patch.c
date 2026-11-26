@@ -311,6 +311,14 @@ static int mode_tar(void) {
         if (write_exact(stdout, hdr, 512) != 0) return 1;
 
         int is_meta = (typeflag == 'L' || typeflag == 'K' || typeflag == 'x' || typeflag == 'g');
+        if (typeflag == 'L' && size >= sizeof(gnu_longname)) {
+            fprintf(stderr, "Oversized GNU longname header\n");
+            return 1;
+        }
+        if (typeflag == 'x' && size >= MAX_TAR_META) {
+            fprintf(stderr, "Oversized PAX metadata header\n");
+            return 1;
+        }
         if (typeflag == 'L' && size > 0 && size < sizeof(gnu_longname)) {
             if (read_exact(stdin, (uint8_t *)gnu_longname, (size_t)size) != 1) return 1;
             gnu_longname[size] = '\0';

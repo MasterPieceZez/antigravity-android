@@ -164,7 +164,7 @@ class ControlCenterSheetController(
             }
             AlertDialog.Builder(activity)
                 .setTitle("Reinstall / Update CLI")
-                .setMessage("Stop Antigravity Hub and re-run the official Antigravity CLI installer?")
+                .setMessage("Stop Antigravity Hub and run the official Antigravity CLI installer from https://antigravity.google/cli/install.sh?")
                 .setPositiveButton("Reinstall") { _, _ ->
                     callbacks.onReinstallCliConfirmed()
                 }

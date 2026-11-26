@@ -157,6 +157,15 @@ def main() -> int:
         res = run_patcher(bin_path, ["--check-tar"], case_bytes)
         assert res.returncode != 0, f"Unsafe case {idx} unexpectedly passed"
 
+
+    # Oversized GNU longname header (>= 8192 bytes) must be rejected in --tar mode
+    oversized_name = b"a" * 8200
+    oversized_tar = make_raw_ustar_header(b"././@LongLink", typeflag=b"L", size=len(oversized_name)) + oversized_name
+    pad_len = (512 - (len(oversized_name) % 512)) % 512
+    oversized_tar += b"\x00" * pad_len + b"\x00" * 1024
+    res = run_patcher(bin_path, ["--tar"], oversized_tar)
+    assert res.returncode != 0, "Expected oversized GNU longname to fail in --tar mode"
+
     print("All agy_patch tests passed!")
     return 0
 

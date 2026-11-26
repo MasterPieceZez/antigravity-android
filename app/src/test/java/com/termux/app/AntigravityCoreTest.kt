@@ -219,4 +219,60 @@ class AntigravityCoreTest {
         assertEquals("fresh", java.io.File(filesRoot, "home/restored.txt").readText())
         assertFalse(java.io.File(filesRoot, "home/stale.txt").exists())
     }
+
+    @Test
+    fun accountManager_encryptsSnapshotsAndMigratesLegacyPlaintext() {
+        val tempHome = java.nio.file.Files.createTempDirectory("agy_enc_test").toFile()
+        try {
+            val bridgeAccounts = java.io.File(tempHome, ".agy_bridge/accounts")
+            val xorCipher = object : CredentialCipher {
+                private val header = "ENC:".toByteArray(Charsets.UTF_8)
+                override fun encrypt(plain: ByteArray): ByteArray {
+                    val out = ByteArray(header.size + plain.size)
+                    System.arraycopy(header, 0, out, 0, header.size)
+                    for (i in plain.indices) out[header.size + i] = (plain[i].toInt() xor 0x5A).toByte()
+                    return out
+                }
+                override fun decrypt(data: ByteArray): ByteArray {
+                    if (data.size <= header.size) return data
+                    for (i in header.indices) if (data[i] != header[i]) return data
+                    val out = ByteArray(data.size - header.size)
+                    for (i in out.indices) out[i] = (data[header.size + i].toInt() xor 0x5A).toByte()
+                    return out
+                }
+            }
+            val mgr = AntigravityAccountManager(homeDir = tempHome, accountsRoot = bridgeAccounts, cipher = xorCipher)
+            val primaryToken = java.io.File(tempHome, ".gemini/antigravity-cli/antigravity-oauth-token")
+            primaryToken.parentFile?.mkdirs()
+
+            val plainToken = """{"id_token_email":"enc@example.com","token":{"access_token":"secret_xyz"}}"""
+            primaryToken.writeText(plainToken)
+            val captured = mgr.captureActiveAccount()
+            assertNotNull(captured)
+
+            val snapFile = java.io.File(bridgeAccounts, "${captured!!.id}/antigravity-oauth-token")
+            assertTrue(snapFile.isFile)
+            assertFalse("Snapshot on disk must not contain plaintext token", snapFile.readText().contains("secret_xyz"))
+
+            // Clear active token and switch back -> active token is decrypted
+            mgr.prepareForNewAccountLogin()
+            assertFalse(primaryToken.exists())
+            val restored = mgr.switchToAccount(captured.id)
+            assertNotNull(restored)
+            assertEquals("enc@example.com", mgr.getActiveEmail())
+            assertTrue(primaryToken.readText().contains("secret_xyz"))
+
+            // Legacy plaintext snapshot in another account directory still loads seamlessly
+            val legacyId = AntigravityAccountManager.accountIdForEmail("legacy@example.com")
+            val legacyDir = java.io.File(bridgeAccounts, legacyId).apply { mkdirs() }
+            java.io.File(legacyDir, "antigravity-oauth-token")
+                .writeText("""{"id_token_email":"legacy@example.com","token":{"access_token":"legacy_tok"}}""")
+            val switchedLegacy = mgr.switchToAccount(legacyId)
+            assertNotNull(switchedLegacy)
+            assertEquals("legacy@example.com", mgr.getActiveEmail())
+            assertTrue(primaryToken.readText().contains("legacy_tok"))
+        } finally {
+            tempHome.deleteRecursively()
+        }
+    }
 }
