@@ -639,19 +639,19 @@ object AntigravityEngine {
                 )
             }
             provisionBridgeAssets(context)
-            onStatus(10, "Updating packages & installing curl...")
+            onStatus(10, "Downloading Antigravity CLI installer...")
             val script = """
                 set -e
                 export DEBIAN_FRONTEND=noninteractive
                 export APT_LISTCHANGES_FRONTEND=none
-                dpkg --configure -a >/dev/null 2>&1 || true
-                apt-get update -y
-                apt-get -f install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
-                apt-get upgrade -y --with-new-pkgs -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
-                apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" curl ca-certificates
                 INSTALL_SH="${'$'}TMPDIR/agy_install.sh"
                 trap 'rm -f "${'$'}INSTALL_SH"' EXIT
-                curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 180 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh
+                if ! command -v curl >/dev/null 2>&1 || ! curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh; then
+                    dpkg --configure -a >/dev/null 2>&1 || true
+                    apt-get update -y
+                    apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" curl libcurl libngtcp2 libnghttp3 libnghttp2 libssh2 openssl zlib ca-certificates
+                    curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 180 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh
+                fi
                 if [ ! -s "${'$'}INSTALL_SH" ] || ! head -n 1 "${'$'}INSTALL_SH" | grep -q '^#!'; then
                     echo "Downloaded installer script failed basic sanity check" >&2
                     exit 1
