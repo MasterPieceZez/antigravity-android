@@ -154,7 +154,12 @@ object AntigravityFileHelper {
         if (hasPublicDownloadsWriteAccess(context)) {
             return runCatching {
                 val outFile = uniqueFile(getDownloadsDir(), safeName)
-                FileOutputStream(outFile).use(writer)
+                try {
+                    FileOutputStream(outFile).use(writer)
+                } catch (e: Exception) {
+                    runCatching { outFile.delete() }
+                    throw e
+                }
                 runCatching {
                     MediaScannerConnection.scanFile(context, arrayOf(outFile.absolutePath), null, null)
                 }
@@ -198,7 +203,12 @@ object AntigravityFileHelper {
             val fallbackDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                 ?: File(context.filesDir, "downloads").apply { mkdirs() }
             val outFile = uniqueFile(fallbackDir, safeName)
-            FileOutputStream(outFile).use(writer)
+            try {
+                FileOutputStream(outFile).use(writer)
+            } catch (e: Exception) {
+                runCatching { outFile.delete() }
+                throw e
+            }
             outFile.absolutePath
         }
     }

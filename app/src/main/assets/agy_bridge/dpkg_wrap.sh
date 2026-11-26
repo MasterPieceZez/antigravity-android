@@ -65,6 +65,7 @@ for arg in "$@"; do
                     ) > "$PKG_DIR/DEBIAN/md5sums"
                 fi
                 dpkg-deb -Znone -b "$PKG_DIR" "$OUT_DEB" >/dev/null
+                rm -rf "$PKG_DIR"
                 NEW_ARGS+=("$OUT_DEB")
                 IDX=$((IDX + 1))
             else

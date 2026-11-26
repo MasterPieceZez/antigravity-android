@@ -123,7 +123,7 @@ object BackupRestoreEngine {
             }
 
             val tar = resolveTarBinary()
-            val tarProc = ProcessBuilder(tar.absolutePath, "-tf", "-").apply {
+            val tarProc = ProcessBuilder(tar.absolutePath, "-tvf", "-").apply {
                 environment().putAll(env)
                 redirectErrorStream(true)
             }.start()
@@ -136,8 +136,29 @@ object BackupRestoreEngine {
             }.apply { start() }
             var unsafeEntry: String? = null
             tarProc.inputStream.bufferedReader().forEachLine { line ->
-                if (unsafeEntry == null && !isSafeTarEntryPath(line)) {
-                    unsafeEntry = line.trim()
+                if (unsafeEntry == null) {
+                    val trimmed = line.trim()
+                    if (trimmed.contains(" -> ")) {
+                        val segs = trimmed.split(" -> ", limit = 2)
+                        val entry = segs[0].trim().substringAfterLast(' ')
+                        val target = segs[1].trim()
+                        if (!isSafeTarEntryPath(entry) || !isSafeArchiveLinkTarget(entry, target, isHardLink = false)) {
+                            unsafeEntry = trimmed
+                        }
+                    } else if (trimmed.contains(" link to ")) {
+                        val segs = trimmed.split(" link to ", limit = 2)
+                        val entry = segs[0].trim().substringAfterLast(' ')
+                        val target = segs[1].trim()
+                        if (!isSafeTarEntryPath(entry) || !isSafeArchiveLinkTarget(entry, target, isHardLink = true)) {
+                            unsafeEntry = trimmed
+                        }
+                    } else {
+                        val parts = trimmed.split(Regex("\\s+"), limit = 6)
+                        val path = if (parts.size >= 6) parts[5] else trimmed
+                        if (!isSafeTarEntryPath(path)) {
+                            unsafeEntry = trimmed
+                        }
+                    }
                 }
             }
             pipe.join()

@@ -7,8 +7,10 @@ import android.app.DownloadManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -34,9 +36,11 @@ import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -119,6 +123,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private var currentHubUrl: String? = null
     @Volatile
     private var currentWebUrl: String? = null
+    private val serviceStoppedReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            Logger.logDebug(LOG_TAG, "Received service stop broadcast, finishing activity")
+            finishAffinity()
+        }
+    }
     private var isHubReconnectInFlight = false
     private var isBootInFlight = false
     private var lastBackPressedMs = 0L
@@ -268,6 +278,13 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         if (prefs.getBoolean(KEY_CPU_WAKELOCK, false)) {
             applyCpuWakeLock(true)
+        }
+
+        val serviceStopFilter = IntentFilter("com.agy.os.ACTION_SERVICE_STOPPED")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(serviceStoppedReceiver, serviceStopFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(serviceStoppedReceiver, serviceStopFilter)
         }
     }
 
@@ -636,7 +653,31 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 if (AntigravityFileHelper.isTrustedHubUri(uri.toString())) {
                     return false
                 }
+                if (request != null && !request.isForMainFrame) {
+                    return false
+                }
                 openExternalUri(uri)
+                return true
+            }
+
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                super.onReceivedError(view, request, error)
+                if (request?.isForMainFrame == true) {
+                    reconnectBanner.visibility = View.VISIBLE
+                    txtReconnectBanner.text = "Antigravity Hub unavailable. Reconnecting..."
+                }
+            }
+
+            override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                val didCrash = detail?.didCrash() ?: false
+                Logger.logError(LOG_TAG, "WebView render process gone. Crashed: $didCrash")
+                reconnectBanner.visibility = View.VISIBLE
+                txtReconnectBanner.text = "Render process restarted. Reloading..."
+                view?.let {
+                    (it.parent as? ViewGroup)?.removeView(it)
+                    it.destroy()
+                }
+                recreate()
                 return true
             }
 
@@ -1776,6 +1817,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
     override fun onDestroy() {
         super.onDestroy()
+        runCatching { unregisterReceiver(serviceStoppedReceiver) }
         fileUploadCallback?.onReceiveValue(null)
         fileUploadCallback = null
         pendingWebPermissionRequest?.let { runCatching { it.deny() } }

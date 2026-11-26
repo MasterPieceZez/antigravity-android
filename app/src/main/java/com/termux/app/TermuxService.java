@@ -229,8 +229,10 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
     /** Process action to stop service. */
     private void actionStopService() {
         mWantsToStop = true;
+        AntigravityBackgroundController.stop();
         AntigravityEngine.stopBackgroundProcesses();
         killAllTermuxExecutionCommands();
+        sendBroadcast(new Intent("com.agy.os.ACTION_SERVICE_STOPPED").setPackage(getPackageName()));
         requestStopService();
     }
 
@@ -868,7 +870,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
     /** Update the shown foreground service notification after making any changes that affect it. */
     private synchronized void updateNotification() {
-        if (mWakeLock == null && mShellManager.mTermuxSessions.isEmpty() && mShellManager.mTermuxTasks.isEmpty() && !AntigravityEngine.isHubListeningCached()) {
+        if (mWakeLock == null && mShellManager.mTermuxSessions.isEmpty() && mShellManager.mTermuxTasks.isEmpty() && !AntigravityEngine.isHubListeningCached() && !AntigravityBackgroundController.isRunning()) {
             // Exit if we are updating after the user disabled all locks with no sessions, tasks, or Hub running.
             requestStopService();
         } else {

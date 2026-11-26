@@ -1,6 +1,6 @@
 # Antigravity for Android
 
-[![Release](https://img.shields.io/github/v/release/MasterPieceZez/antigravity-android?color=3B82F6&label=release&v=1.0.1)](https://github.com/MasterPieceZez/antigravity-android/releases) [![Build](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml) ![ABI](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20x86__64%20%7C%20universal-14171D) ![License](https://img.shields.io/badge/license-GPL--3.0-22C55E)
+[![Release](https://img.shields.io/github/v/release/MasterPieceZez/antigravity-android?color=3B82F6&label=release&v=1.0.3)](https://github.com/MasterPieceZez/antigravity-android/releases) [![Build](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml) ![ABI](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20x86__64%20%7C%20universal-14171D) ![License](https://img.shields.io/badge/license-GPL--3.0-22C55E)
 
 An unofficial standalone Android app for Google Antigravity (`agy`). It bundles the Termux Linux environment inside one APK, runs `agy --hub` locally without root or PRoot, and opens the Antigravity Web UI in a fullscreen WebView.
 
