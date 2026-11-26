@@ -2,6 +2,7 @@ package com.termux.app
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -108,5 +109,63 @@ class AntigravityCoreTest {
         assertFalse(AntigravityFileHelper.isTrustedHubUri("http://127.0.0.1:8080/"))
         assertFalse(AntigravityFileHelper.isTrustedHubUri("file://localhost:4400/etc/passwd"))
         assertFalse(AntigravityFileHelper.isTrustedHubUri("https://evil.example.com:4400/"))
+    }
+
+    @Test
+    fun accountManager_multiAccountSwitchAndQuotaFailover() {
+        val tempHome = java.nio.file.Files.createTempDirectory("agy_acct_test").toFile()
+        try {
+            val bridgeAccounts = java.io.File(tempHome, ".agy_bridge/accounts")
+            val mgr = AntigravityAccountManager(homeDir = tempHome, accountsRoot = bridgeAccounts)
+            val primaryToken = java.io.File(tempHome, ".gemini/antigravity-cli/antigravity-oauth-token")
+            val jetskiToken = java.io.File(tempHome, ".gemini/jetski-standalone-oauth-token")
+            primaryToken.parentFile?.mkdirs()
+            jetskiToken.parentFile?.mkdirs()
+
+            primaryToken.writeText("""{"id_token_email":"alice@example.com","token":{"access_token":"tok_a"}}""")
+            jetskiToken.writeText("""{"id_token_email":"alice@example.com","token":{"access_token":"j_a"}}""")
+            val alice = mgr.captureActiveAccount()
+            assertNotNull(alice)
+            assertEquals("alice@example.com", alice!!.email)
+
+            // Prepare for new login, then sign in as Bob
+            mgr.prepareForNewAccountLogin()
+            assertFalse(primaryToken.exists())
+            primaryToken.writeText("""{"id_token_email":"bob@example.com","token":{"access_token":"tok_b"}}""")
+            val bob = mgr.captureActiveAccount()
+            assertNotNull(bob)
+            assertEquals("bob@example.com", bob!!.email)
+
+            val all = mgr.listAccounts()
+            assertEquals(2, all.size)
+            assertTrue(all.first { it.email == "bob@example.com" }.isActive)
+
+            // Instant switch back to Alice
+            val switched = mgr.switchToAccount(alice.id)
+            assertNotNull(switched)
+            assertEquals("alice@example.com", mgr.getActiveEmail())
+            assertTrue(primaryToken.readText().contains("tok_a"))
+
+            // Auto-failover when Alice's quota is exhausted -> picks Bob
+            val next = mgr.markCurrentQuotaExhaustedAndPickNext(cooldownMs = 60_000L)
+            assertNotNull(next)
+            assertEquals("bob@example.com", next!!.email)
+            assertEquals("bob@example.com", mgr.getActiveEmail())
+
+            // If Bob also drains while Alice is in cooldown -> returns null (prevents loop)
+            val none = mgr.markCurrentQuotaExhaustedAndPickNext(cooldownMs = 60_000L)
+            assertNull(none)
+        } finally {
+            tempHome.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun accountManager_detectsQuotaSignals() {
+        assertTrue(AntigravityAccountManager.isQuotaExhaustedSignal("Error: RESOURCE_EXHAUSTED"))
+        assertTrue(AntigravityAccountManager.isQuotaExhaustedSignal("You have reached your usage limit"))
+        assertTrue(AntigravityAccountManager.isQuotaExhaustedSignal("HTTP 429 rate limit exceeded"))
+        assertFalse(AntigravityAccountManager.isQuotaExhaustedSignal("Build succeeded in 429 ms"))
+        assertFalse(AntigravityAccountManager.isQuotaExhaustedSignal("Hello world"))
     }
 }

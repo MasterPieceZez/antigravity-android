@@ -127,6 +127,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private var lastRenderCrashMs = 0L
     private var renderCrashCount = 0
     private var pendingTerminalRestore = false
+    private val accountManager = AntigravityAccountManager()
+    @Volatile
+    private var isSwitchingAccount = false
+    @Volatile
+    private var lastQuotaTriggerAt = 0L
     private val serviceStoppedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             Logger.logDebug(LOG_TAG, "Received service stop broadcast, finishing activity")
@@ -441,6 +446,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 Toast.makeText(this@AntigravityMainActivity, "Blob download exceeds 25 MB limit", Toast.LENGTH_LONG).show()
             }
         }
+
+        @JavascriptInterface
+        fun onQuotaExhausted(reason: String?) {
+            if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return
+            handleQuotaExhaustedSignal(reason)
+        }
     }
 
     private fun injectAgentNotificationBridge() {
@@ -525,6 +536,83 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 }
                 attachObserver();
                 setInterval(checkState, 2000);
+
+                // Quota exhaustion detection (fetch, XHR, and visible error banners)
+                var lastQuotaSignalAt = 0;
+                function isQuotaText(txt) {
+                    if (!txt) return false;
+                    var lower = String(txt).toLowerCase();
+                    return lower.indexOf('resource_exhausted') !== -1 ||
+                        lower.indexOf('quota exhausted') !== -1 ||
+                        lower.indexOf('quota exceeded') !== -1 ||
+                        lower.indexOf('exceeded your current quota') !== -1 ||
+                        lower.indexOf('you have reached your') !== -1 ||
+                        lower.indexOf('usage limit reached') !== -1 ||
+                        lower.indexOf('rate limit exceeded') !== -1 ||
+                        lower.indexOf('model quota') !== -1 ||
+                        lower.indexOf('capacity exhausted') !== -1 ||
+                        (lower.indexOf('429') !== -1 && (lower.indexOf('quota') !== -1 || lower.indexOf('rate') !== -1 || lower.indexOf('limit') !== -1));
+                }
+                function signalQuota(reason) {
+                    var now = Date.now();
+                    if (now - lastQuotaSignalAt < 15000) return;
+                    lastQuotaSignalAt = now;
+                    if (window.AntigravityAndroid && typeof window.AntigravityAndroid.onQuotaExhausted === 'function') {
+                        window.AntigravityAndroid.onQuotaExhausted(String(reason || 'quota_exhausted').slice(0, 240));
+                    }
+                }
+
+                if (window.fetch && !window.__agyFetchWrapped) {
+                    window.__agyFetchWrapped = true;
+                    var origFetch = window.fetch;
+                    window.fetch = function() {
+                        return origFetch.apply(this, arguments).then(function(resp) {
+                            try {
+                                if (resp && resp.status === 429) {
+                                    signalQuota('HTTP 429 rate limit');
+                                } else if (resp && !resp.ok && resp.status >= 400) {
+                                    resp.clone().text().then(function(body) {
+                                        if (isQuotaText(body)) signalQuota(body);
+                                    }).catch(function() {});
+                                }
+                            } catch (e) {}
+                            return resp;
+                        });
+                    };
+                }
+
+                if (window.XMLHttpRequest && !window.__agyXhrWrapped) {
+                    window.__agyXhrWrapped = true;
+                    var origOpen = XMLHttpRequest.prototype.open;
+                    XMLHttpRequest.prototype.open = function() {
+                        this.addEventListener('load', function() {
+                            try {
+                                if (this.status === 429) {
+                                    signalQuota('XHR 429 rate limit');
+                                } else if (this.status >= 400 && typeof this.responseText === 'string' && isQuotaText(this.responseText)) {
+                                    signalQuota(this.responseText);
+                                }
+                            } catch (e) {}
+                        });
+                        return origOpen.apply(this, arguments);
+                    };
+                }
+
+                setInterval(function() {
+                    try {
+                        var alerts = document.querySelectorAll('[role="alert"], [class*="error"], [class*="quota"], [class*="banner"], [class*="toast"]');
+                        for (var i = 0; i < alerts.length; i++) {
+                            var el = alerts[i];
+                            if (el && el.offsetParent !== null) {
+                                var txt = (el.textContent || '').trim();
+                                if (txt.length > 0 && txt.length < 600 && isQuotaText(txt)) {
+                                    signalQuota(txt);
+                                    break;
+                                }
+                            }
+                        }
+                    } catch (e) {}
+                }, 3000);
             })();
         """.trimIndent()
         webView.evaluateJavascript(js, null)
@@ -740,6 +828,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 if (AntigravityFileHelper.isTrustedHubUri(url)) {
                     reconnectBanner.visibility = View.GONE
                     injectAgentNotificationBridge()
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        accountManager.captureActiveAccount()
+                    }
                 }
             }
         }
@@ -1562,6 +1653,20 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         val dotHub = view.findViewById<View>(R.id.dot_hub)
         val txtHub = view.findViewById<TextView>(R.id.txt_status_hub)
 
+        val txtActiveAccount = view.findViewById<TextView>(R.id.txt_active_account)
+        val btnAddAccount = view.findViewById<View>(R.id.sheet_btn_add_account)
+        val accountsListContainer = view.findViewById<LinearLayout>(R.id.sheet_accounts_list)
+        val switchAutoSwitch = view.findViewById<Switch>(R.id.switch_auto_switch_quota)
+
+        switchAutoSwitch.isChecked = accountManager.isAutoSwitchEnabled(this)
+        switchAutoSwitch.setOnCheckedChangeListener { _, checked ->
+            accountManager.setAutoSwitchEnabled(this, checked)
+        }
+        btnAddAccount.setOnClickListener {
+            dialog.dismiss()
+            startAddAccountFlow()
+        }
+
         val switchScreenOn = view.findViewById<Switch>(R.id.switch_keep_screen_on)
         val switchCpuWake = view.findViewById<Switch>(R.id.switch_cpu_wakelock)
         val switchNotifyDone = view.findViewById<Switch>(R.id.switch_notify_done)
@@ -1603,12 +1708,15 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         lifecycleScope.launch {
             val health = AntigravityEngine.getHealth()
+            val accounts = withContext(Dispatchers.IO) { accountManager.listAccounts() }
             if (isFinishing || isDestroyed || sheetDismissed) return@launch
             dotEngine.setBackgroundResource(if (health.engineReady) R.drawable.agy_dot_ok else R.drawable.agy_dot_off)
             txtEngine.text = if (health.engineReady) "Embedded Engine: Active (${Build.SUPPORTED_ABIS.firstOrNull() ?: "Linux"})" else "Embedded Engine: Initializing"
 
             dotHub.setBackgroundResource(if (health.hubReady) R.drawable.agy_dot_ok else R.drawable.agy_dot_off)
             txtHub.text = if (health.hubReady) "Antigravity Hub (4400): Online" else "Antigravity Hub (4400): Offline"
+
+            renderAccountsInSheet(txtActiveAccount, accountsListContainer, accounts, dialog)
         }
 
         view.findViewById<View>(R.id.sheet_btn_reload).setOnClickListener {
@@ -1738,6 +1846,198 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         }
 
         dialog.show()
+    }
+
+    private fun renderAccountsInSheet(
+        txtActiveAccount: TextView,
+        container: LinearLayout,
+        accounts: List<AccountProfile>,
+        dialog: BottomSheetDialog
+    ) {
+        container.removeAllViews()
+        val active = accounts.firstOrNull { it.isActive }
+        txtActiveAccount.text = if (active != null) "Active: ${active.email}" else "No active account signed in"
+
+        if (accounts.isEmpty()) {
+            val emptyTv = TextView(this).apply {
+                text = "Sign in to Antigravity, then tap '+ Add Account' to save multiple accounts for 1-tap switching."
+                setTextColor(getColor(R.color.agy_text_secondary))
+                textSize = 12f
+            }
+            container.addView(emptyTv)
+            return
+        }
+
+        val dp = resources.displayMetrics.density
+        val now = System.currentTimeMillis()
+        for (acct in accounts) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setBackgroundResource(R.drawable.agy_btn_secondary)
+                val padH = (12 * dp).toInt()
+                val padV = (8 * dp).toInt()
+                setPadding(padH, padV, padH, padV)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = (6 * dp).toInt() }
+            }
+
+            val label = TextView(this).apply {
+                val statusSuffix = when {
+                    acct.isActive -> "  • Active"
+                    acct.isInCooldown(now) -> "  • Cooldown"
+                    else -> ""
+                }
+                text = "${acct.email}$statusSuffix"
+                setTextColor(getColor(if (acct.isActive) R.color.agy_accent else R.color.agy_text_primary))
+                textSize = 12.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            row.addView(label)
+
+            if (!acct.isActive) {
+                val btnSwitch = TextView(this).apply {
+                    text = "Switch"
+                    setTextColor(0xFFFFFFFF.toInt())
+                    setBackgroundResource(R.drawable.agy_btn_primary)
+                    textSize = 11.5f
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    setPadding((10 * dp).toInt(), (5 * dp).toInt(), (10 * dp).toInt(), (5 * dp).toInt())
+                    setOnClickListener {
+                        dialog.dismiss()
+                        switchAccountNow(acct)
+                    }
+                }
+                row.addView(btnSwitch)
+
+                val btnDelete = TextView(this).apply {
+                    text = "✕"
+                    setTextColor(getColor(R.color.agy_text_secondary))
+                    textSize = 13f
+                    setPadding((10 * dp).toInt(), (4 * dp).toInt(), (4 * dp).toInt(), (4 * dp).toInt())
+                    setOnClickListener {
+                        lifecycleScope.launch {
+                            val removed = withContext(Dispatchers.IO) { accountManager.removeAccount(acct.id) }
+                            if (removed) {
+                                val updated = withContext(Dispatchers.IO) { accountManager.listAccounts() }
+                                renderAccountsInSheet(txtActiveAccount, container, updated, dialog)
+                                Toast.makeText(this@AntigravityMainActivity, "Removed ${acct.email}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
+                row.addView(btnDelete)
+            }
+            container.addView(row)
+        }
+    }
+
+    private fun switchAccountNow(target: AccountProfile, autoReason: String? = null) {
+        if (isSwitchingAccount) return
+        isSwitchingAccount = true
+        val bannerMsg = if (autoReason != null) {
+            "Quota drained — switching to ${target.email}..."
+        } else {
+            "Switching to ${target.email}..."
+        }
+        txtReconnectBanner.text = bannerMsg
+        reconnectBanner.visibility = View.VISIBLE
+
+        lifecycleScope.launch {
+            try {
+                val switched = withContext(Dispatchers.IO) {
+                    accountManager.switchToAccount(target.id, clearCooldown = autoReason == null)
+                }
+                if (switched == null) {
+                    reconnectBanner.visibility = View.GONE
+                    Toast.makeText(this@AntigravityMainActivity, "Failed to load credentials for ${target.email}", Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity)
+                if (newUrl != null) {
+                    currentHubUrl = newUrl
+                    splashContainer.visibility = View.GONE
+                    webView.visibility = View.VISIBLE
+                    floatingPill.visibility = View.VISIBLE
+                    webView.loadUrl(newUrl)
+                    val msg = if (autoReason != null) {
+                        "Quota drained — auto-switched to ${switched.email}"
+                    } else {
+                        "Switched to ${switched.email}"
+                    }
+                    Toast.makeText(this@AntigravityMainActivity, msg, Toast.LENGTH_LONG).show()
+                    if (autoReason != null) {
+                        showAgentDoneNotification("Account Auto-Switched", msg, force = true)
+                    }
+                } else {
+                    reconnectBanner.visibility = View.GONE
+                    Toast.makeText(this@AntigravityMainActivity, "Switched credentials, but Hub failed to restart", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                isSwitchingAccount = false
+            }
+        }
+    }
+
+    private fun startAddAccountFlow() {
+        if (isSwitchingAccount) return
+        isSwitchingAccount = true
+        txtReconnectBanner.text = "Preparing Google sign-in for new account..."
+        reconnectBanner.visibility = View.VISIBLE
+
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    accountManager.prepareForNewAccountLogin()
+                }
+                runCatching {
+                    val cm = android.webkit.CookieManager.getInstance()
+                    cm.removeAllCookies(null)
+                    cm.flush()
+                }
+                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity)
+                if (newUrl != null) {
+                    currentHubUrl = newUrl
+                    splashContainer.visibility = View.GONE
+                    webView.visibility = View.VISIBLE
+                    floatingPill.visibility = View.VISIBLE
+                    webView.loadUrl(newUrl)
+                    Toast.makeText(this@AntigravityMainActivity, "Sign in with your next Google account", Toast.LENGTH_LONG).show()
+                } else {
+                    reconnectBanner.visibility = View.GONE
+                    Toast.makeText(this@AntigravityMainActivity, "Failed to restart Hub for login", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                isSwitchingAccount = false
+            }
+        }
+    }
+
+    private fun handleQuotaExhaustedSignal(reason: String?) {
+        val now = System.currentTimeMillis()
+        if (isSwitchingAccount || now - lastQuotaTriggerAt < 15_000L) return
+        if (!accountManager.isAutoSwitchEnabled(this)) return
+        lastQuotaTriggerAt = now
+
+        lifecycleScope.launch {
+            val next = withContext(Dispatchers.IO) {
+                accountManager.markCurrentQuotaExhaustedAndPickNext()
+            }
+            if (isFinishing || isDestroyed) return@launch
+            if (next != null) {
+                switchAccountNow(next, autoReason = reason ?: "quota_exhausted")
+            } else {
+                Toast.makeText(
+                    this@AntigravityMainActivity,
+                    "Quota drained — no other available account to switch to",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
 
     private fun runBackupFlow(
