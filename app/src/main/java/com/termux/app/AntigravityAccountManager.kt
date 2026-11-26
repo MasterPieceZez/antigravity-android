@@ -2,7 +2,6 @@ package com.termux.app
 
 import android.content.Context
 import android.system.Os
-import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
 
@@ -221,8 +220,8 @@ class AntigravityAccountManager(
     private fun readEmailFromTokenFile(file: File): String? {
         if (!file.isFile) return null
         return runCatching {
-            val json = JSONObject(file.readText())
-            json.optString("id_token_email", "").trim().ifBlank { null }
+            val content = file.readText()
+            EMAIL_JSON_REGEX.find(content)?.groupValues?.getOrNull(1)?.trim()?.ifBlank { null }
         }.getOrNull()
     }
 
@@ -241,30 +240,50 @@ class AntigravityAccountManager(
             )
         }
         return runCatching {
-            val json = JSONObject(metaFile.readText())
-            val email = json.optString("email", "").trim().ifBlank { fallbackEmail ?: "" }
+            val raw = metaFile.readText()
+            val email = extractJsonString(raw, "email")?.trim()?.ifBlank { null } ?: fallbackEmail ?: ""
             if (email.isBlank()) return@runCatching null
+            val now = System.currentTimeMillis()
             AccountProfile(
-                id = json.optString("id", fallbackId),
+                id = extractJsonString(raw, "id")?.ifBlank { fallbackId } ?: fallbackId,
                 email = email,
-                addedAt = json.optLong("addedAt", System.currentTimeMillis()),
-                lastUsedAt = json.optLong("lastUsedAt", System.currentTimeMillis()),
-                quotaExhaustedAt = json.optLong("quotaExhaustedAt", 0L),
-                cooldownUntil = json.optLong("cooldownUntil", 0L)
+                addedAt = extractJsonLong(raw, "addedAt") ?: now,
+                lastUsedAt = extractJsonLong(raw, "lastUsedAt") ?: now,
+                quotaExhaustedAt = extractJsonLong(raw, "quotaExhaustedAt") ?: 0L,
+                cooldownUntil = extractJsonLong(raw, "cooldownUntil") ?: 0L
             )
         }.getOrNull()
     }
 
     private fun writeMeta(dir: File, profile: AccountProfile) {
         ensureSecureDir(dir)
-        val json = JSONObject()
-            .put("id", profile.id)
-            .put("email", profile.email)
-            .put("addedAt", profile.addedAt)
-            .put("lastUsedAt", profile.lastUsedAt)
-            .put("quotaExhaustedAt", profile.quotaExhaustedAt)
-            .put("cooldownUntil", profile.cooldownUntil)
-        atomicWriteText(File(dir, FILE_META), json.toString())
+        val json = buildString {
+            append('{')
+            append("\"id\":\"").append(escapeJson(profile.id)).append("\",")
+            append("\"email\":\"").append(escapeJson(profile.email)).append("\",")
+            append("\"addedAt\":").append(profile.addedAt).append(',')
+            append("\"lastUsedAt\":").append(profile.lastUsedAt).append(',')
+            append("\"quotaExhaustedAt\":").append(profile.quotaExhaustedAt).append(',')
+            append("\"cooldownUntil\":").append(profile.cooldownUntil)
+            append('}')
+        }
+        atomicWriteText(File(dir, FILE_META), json)
+    }
+
+    private fun extractJsonString(raw: String, key: String): String? {
+        val regex = Regex(""""${Regex.escape(key)}"\s*:\s*"((?:\\.|[^"\\])*)"""")
+        return regex.find(raw)?.groupValues?.getOrNull(1)
+            ?.replace("\\\"", "\"")
+            ?.replace("\\\\", "\\")
+    }
+
+    private fun extractJsonLong(raw: String, key: String): Long? {
+        val regex = Regex(""""${Regex.escape(key)}"\s*:\s*(-?\d+)""")
+        return regex.find(raw)?.groupValues?.getOrNull(1)?.toLongOrNull()
+    }
+
+    private fun escapeJson(value: String): String {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"")
     }
 
     private fun copyCredentialIfPresent(src: File, dst: File) {
@@ -313,6 +332,7 @@ class AntigravityAccountManager(
         private const val FILE_JETSKI_TOKEN = "jetski-standalone-oauth-token"
         private const val FILE_USER_SCOPE = "credential-user-scope"
         const val DEFAULT_QUOTA_COOLDOWN_MS = 30L * 60L * 1000L
+        private val EMAIL_JSON_REGEX = Regex(""""id_token_email"\s*:\s*"([^"]+)"""")
 
         fun accountIdForEmail(email: String): String {
             val digest = MessageDigest.getInstance("SHA-256")
