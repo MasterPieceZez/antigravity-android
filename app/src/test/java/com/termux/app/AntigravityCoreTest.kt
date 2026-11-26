@@ -70,6 +70,13 @@ class AntigravityCoreTest {
         assertFalse(LocalBridgeServer.isAllowedOrigin("https://evil.example.com"))
         assertFalse(LocalBridgeServer.isAllowedOrigin("http://localhost.evil.com"))
 
+        assertTrue(LocalBridgeServer.isAllowedHost(null))
+        assertTrue(LocalBridgeServer.isAllowedHost("127.0.0.1:4401"))
+        assertTrue(LocalBridgeServer.isAllowedHost("localhost:4401"))
+        assertTrue(LocalBridgeServer.isAllowedHost("localhost"))
+        assertFalse(LocalBridgeServer.isAllowedHost("evil.example.com:4401"))
+        assertFalse(LocalBridgeServer.isAllowedHost("127.0.0.1:8080"))
+
         assertTrue(LocalBridgeServer.isValidToken("secret-token-123", "secret-token-123"))
         assertFalse(LocalBridgeServer.isValidToken("wrong-token", "secret-token-123"))
         assertFalse(LocalBridgeServer.isValidToken("", "secret-token-123"))

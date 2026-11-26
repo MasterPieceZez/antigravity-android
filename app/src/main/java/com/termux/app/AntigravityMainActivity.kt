@@ -449,8 +449,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         @JavascriptInterface
         fun onQuotaExhausted(reason: String?) {
-            if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return
-            handleQuotaExhaustedSignal(reason)
+            runOnUiThread {
+                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@runOnUiThread
+                handleQuotaExhaustedSignal(reason)
+            }
         }
     }
 
@@ -1936,7 +1938,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
 
-    private fun switchAccountNow(target: AccountProfile, autoReason: String? = null) {
+    private fun switchAccountNow(
+        target: AccountProfile,
+        autoReason: String? = null,
+        alreadySwitched: Boolean = false
+    ) {
         if (isSwitchingAccount) return
         isSwitchingAccount = true
         val bannerMsg = if (autoReason != null) {
@@ -1949,8 +1955,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         lifecycleScope.launch {
             try {
-                val switched = withContext(Dispatchers.IO) {
-                    accountManager.switchToAccount(target.id, clearCooldown = autoReason == null)
+                val switched = if (alreadySwitched) {
+                    target
+                } else {
+                    withContext(Dispatchers.IO) {
+                        accountManager.switchToAccount(target.id, clearCooldown = autoReason == null)
+                    }
                 }
                 if (switched == null) {
                     reconnectBanner.visibility = View.GONE
@@ -2029,7 +2039,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             }
             if (isFinishing || isDestroyed) return@launch
             if (next != null) {
-                switchAccountNow(next, autoReason = reason ?: "quota_exhausted")
+                switchAccountNow(next, autoReason = reason ?: "quota_exhausted", alreadySwitched = true)
             } else {
                 Toast.makeText(
                     this@AntigravityMainActivity,

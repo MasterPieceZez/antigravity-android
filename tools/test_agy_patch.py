@@ -89,12 +89,16 @@ def main() -> int:
         add_tar_bytes(tf, "usr/bin/hello.sh", b"#!/data/data/com.termux/files/usr/bin/sh\n")
         add_tar_bytes(tf, "usr/share/doc/readme.gz", gz_payload)
         add_tar_bytes(tf, "usr/share/icon.bin", png_payload)
+        add_tar_bytes(tf, "./home/.bashrc", b"export PREFIX=/data/data/com.termux/files/usr\n")
+        add_tar_bytes(tf, "./home/projects/notes.txt", b"Reference to com.termux should stay intact\n")
     res = run_patcher(bin_path, ["--tar"], tar_buf.getvalue())
     assert res.returncode == 0, res.stderr
     out_tf = tarfile.open(fileobj=io.BytesIO(res.stdout), mode="r:")
     assert out_tf.extractfile("usr/bin/hello.sh").read() == b"#!/data/data/com.agy.os/files/usr/bin/sh\n"
     assert out_tf.extractfile("usr/share/doc/readme.gz").read() == gz_payload
     assert out_tf.extractfile("usr/share/icon.bin").read() == png_payload
+    assert out_tf.extractfile("./home/.bashrc").read() == b"export PREFIX=/data/data/com.agy.os/files/usr\n"
+    assert out_tf.extractfile("./home/projects/notes.txt").read() == b"Reference to com.termux should stay intact\n"
 
     # 3b. --tar preserves PAX long-path compressed files
     pax_gz_buf = io.BytesIO()

@@ -501,7 +501,7 @@ object AntigravityEngine {
 
     suspend fun restartHub(context: Context): String? = withContext(Dispatchers.IO) {
         restartMutex.withLock {
-            stopBackgroundProcesses()
+            stopBackgroundProcessesSuspend()
             delay(450L)
             File(AGY_LOG).apply {
                 parentFile?.mkdirs()
@@ -578,8 +578,7 @@ object AntigravityEngine {
         }
     }
 
-    @JvmStatic
-    fun stopBackgroundProcesses() {
+    private fun sendInitialStopSignals(): Pair<Int?, File> {
         cachedHubListening = false
         runCatching { File(HUB_URL_FILE).delete() }
         val pidFile = File(HUB_PID_FILE)
@@ -599,15 +598,18 @@ object AntigravityEngine {
                     pb.start().waitFor()
                 }
             }
-            val deadline = System.currentTimeMillis() + 800L
-            while (System.currentTimeMillis() < deadline && isPortOpen(HUB_PORT, 100)) {
-                Thread.sleep(100)
+        }
+        return recordedPid to pkill
+    }
+
+    private fun forceKillHubIfListening(recordedPid: Int?, pkill: File) {
+        if (isPortOpen(HUB_PORT, 100)) {
+            if (recordedPid != null && recordedPid > 0) {
+                runCatching { Os.kill(-recordedPid, 9) } // SIGKILL process group
+                runCatching { Os.kill(recordedPid, 9) } // SIGKILL
             }
-            if (isPortOpen(HUB_PORT, 100)) {
-                if (recordedPid != null && recordedPid > 0) {
-                    runCatching { Os.kill(-recordedPid, 9) } // SIGKILL process group
-                    runCatching { Os.kill(recordedPid, 9) } // SIGKILL
-                }
+            if (pkill.isFile) {
+                val env = buildTermuxEnv()
                 runCatching {
                     val pb = ProcessBuilder(pkill.absolutePath, "-9", "-f", "[/]agy --hub")
                     pb.environment().putAll(env)
@@ -616,5 +618,32 @@ object AntigravityEngine {
             }
         }
         cachedHubListening = false
+    }
+
+    suspend fun stopBackgroundProcessesSuspend() = withContext(Dispatchers.IO) {
+        val (recordedPid, pkill) = sendInitialStopSignals()
+        if (pkill.isFile) {
+            val deadline = System.currentTimeMillis() + 800L
+            while (System.currentTimeMillis() < deadline && isPortOpen(HUB_PORT, 100)) {
+                delay(100L)
+            }
+            forceKillHubIfListening(recordedPid, pkill)
+        } else {
+            cachedHubListening = false
+        }
+    }
+
+    @JvmStatic
+    fun stopBackgroundProcesses() {
+        val (recordedPid, pkill) = sendInitialStopSignals()
+        if (pkill.isFile) {
+            val deadline = System.currentTimeMillis() + 800L
+            while (System.currentTimeMillis() < deadline && isPortOpen(HUB_PORT, 100)) {
+                Thread.sleep(100)
+            }
+            forceKillHubIfListening(recordedPid, pkill)
+        } else {
+            cachedHubListening = false
+        }
     }
 }

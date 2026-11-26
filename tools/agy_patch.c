@@ -104,6 +104,17 @@ static int has_binary_or_compressed_ext(const char *path) {
     return 0;
 }
 
+static int is_home_user_file(const char *path) {
+    if (!path) return 0;
+    const char *p = path;
+    while (p[0] == '.' && p[1] == '/') p += 2;
+    while (p[0] == '/') p++;
+    if (strncmp(p, "home/", 5) != 0) return 0;
+    const char *rest = p + 5;
+    if (rest[0] == '\0' || rest[0] == '.') return 0;
+    return 1;
+}
+
 static int has_compressed_or_binary_magic(const uint8_t *buf, size_t len) {
     if (len >= 2 && buf[0] == 0x1f && buf[1] == 0x8b) return 1; /* gzip */
     if (len >= 6 && buf[0] == 0xfd && buf[1] == '7' && buf[2] == 'z' &&
@@ -325,7 +336,7 @@ static int mode_tar(void) {
             int skip_patch = 0;
             int detect_magic = 0;
             if (!is_meta && (typeflag == '0' || typeflag == '\0')) {
-                skip_patch = has_binary_or_compressed_ext(entry_path);
+                skip_patch = has_binary_or_compressed_ext(entry_path) || is_home_user_file(entry_path);
                 detect_magic = 1;
             }
             if (stream_patch_ex(stdin, stdout, 1, size, skip_patch, detect_magic) != 0) return 1;

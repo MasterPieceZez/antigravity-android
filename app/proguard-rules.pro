@@ -1,4 +1,5 @@
--keep class com.termux.** { *; }
+-keep class com.termux.shared.** { *; }
+-keep class com.termux.app.fragments.** { *; }
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }

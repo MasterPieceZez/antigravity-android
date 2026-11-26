@@ -123,6 +123,12 @@ class LocalBridgeServer(
                 }
             }
 
+            val reqHost = headers["host"]
+            if (!isAllowedHost(reqHost)) {
+                writeJson(out, 403, JSONObject().put("ok", false).put("error", "forbidden_host"))
+                return
+            }
+
             val reqOrigin = headers["origin"]
             // Origin validation
             if (!isAllowedOrigin(reqOrigin)) {
@@ -138,6 +144,7 @@ class LocalBridgeServer(
             // Constant-time X-Bridge-Token check
             val expectedToken = AntigravityEngine.getOrCreateBridgeToken()
             if (!isValidToken(headers["x-bridge-token"], expectedToken)) {
+                delay(250L)
                 writeJson(out, 403, JSONObject().put("ok", false).put("error", "unauthorized"), reqOrigin)
                 return
             }
@@ -277,6 +284,16 @@ class LocalBridgeServer(
 
     companion object {
         private const val MAX_BODY_BYTES = 32768
+
+        fun isAllowedHost(hostHeader: String?): Boolean {
+            if (hostHeader.isNullOrBlank()) return true
+            val cleaned = hostHeader.trim().lowercase()
+            val port = AntigravityEngine.BRIDGE_PORT
+            return cleaned == "127.0.0.1" ||
+                cleaned == "localhost" ||
+                cleaned == "127.0.0.1:$port" ||
+                cleaned == "localhost:$port"
+        }
 
         fun isAllowedOrigin(origin: String?): Boolean {
             if (origin.isNullOrBlank()) return true

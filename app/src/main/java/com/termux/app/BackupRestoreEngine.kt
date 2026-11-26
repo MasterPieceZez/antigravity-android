@@ -74,7 +74,9 @@ object BackupRestoreEngine {
         return true
     }
 
-    private fun validateArchive(context: Context, archiveFile: File): Result<Unit> {
+    private fun validateArchiveAndHash(context: Context, archiveFile: File): Result<String> {
+        var zstdProc: Process? = null
+        var checkProc: Process? = null
         return try {
             val zstd = resolveZstdBinary(context)
             val patchBin = File(context.applicationInfo.nativeLibraryDir, "libagy_patch.so")
@@ -82,18 +84,21 @@ object BackupRestoreEngine {
                 return Result.failure(IllegalStateException("Required libagy_patch.so binary not found"))
             }
             val env = AntigravityEngine.buildTermuxEnv()
-            val zstdProc = ProcessBuilder(zstd.absolutePath, "-dc", archiveFile.absolutePath).apply {
+            val zp = ProcessBuilder(zstd.absolutePath, "-dc").apply {
                 environment().putAll(env)
             }.start()
+            zstdProc = zp
 
-            val checkProc = ProcessBuilder(patchBin.absolutePath, "--check-tar").apply {
+            val cp = ProcessBuilder(patchBin.absolutePath, "--check-tar").apply {
                 environment().putAll(env)
                 redirectErrorStream(true)
             }.start()
+            checkProc = cp
+
             val zstdErr = StringBuilder()
             val zstdErrThread = Thread {
                 runCatching {
-                    zstdProc.errorStream.bufferedReader().forEachLine {
+                    zp.errorStream.bufferedReader().forEachLine {
                         if (zstdErr.length < 1000) zstdErr.append(it).append('\n')
                     }
                 }
@@ -101,23 +106,41 @@ object BackupRestoreEngine {
             val checkErr = StringBuilder()
             val checkErrThread = Thread {
                 runCatching {
-                    checkProc.inputStream.bufferedReader().forEachLine {
+                    cp.inputStream.bufferedReader().forEachLine {
                         if (checkErr.length < 1000) checkErr.append(it).append('\n')
                     }
                 }
             }.apply { start() }
             val pipe = Thread {
                 runCatching {
-                    zstdProc.inputStream.use { zOut ->
-                        checkProc.outputStream.use { cIn -> zOut.copyTo(cIn) }
+                    zp.inputStream.use { zOut ->
+                        cp.outputStream.use { cIn -> zOut.copyTo(cIn) }
                     }
                 }
             }.apply { start() }
+
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            runCatching {
+                FileInputStream(archiveFile).use { fis ->
+                    zp.outputStream.use { zIn ->
+                        val buf = ByteArray(128 * 1024)
+                        while (true) {
+                            val n = fis.read(buf)
+                            if (n <= 0) break
+                            digest.update(buf, 0, n)
+                            zIn.write(buf, 0, n)
+                        }
+                        zIn.flush()
+                    }
+                }
+            }
+
             pipe.join()
             zstdErrThread.join()
             checkErrThread.join()
-            val zExit = zstdProc.waitFor()
-            val cExit = checkProc.waitFor()
+            val zExit = zp.waitFor()
+            val cExit = cp.waitFor()
+            val shaHex = digest.digest().joinToString("") { "%02x".format(it) }
             when {
                 cExit != 0 -> Result.failure(
                     SecurityException(checkErr.toString().trim().ifBlank { "Archive safety check failed (exit $cExit)" })
@@ -125,24 +148,14 @@ object BackupRestoreEngine {
                 zExit != 0 -> Result.failure(
                     IllegalStateException("zstd integrity check failed (exit $zExit): ${zstdErr.toString().trim()}")
                 )
-                else -> Result.success(Unit)
+                else -> Result.success(shaHex)
             }
         } catch (e: Exception) {
             Result.failure(e)
+        } finally {
+            runCatching { zstdProc?.destroyForcibly() }
+            runCatching { checkProc?.destroyForcibly() }
         }
-    }
-
-    private fun sha256File(file: File): String {
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
-        FileInputStream(file).use { fis ->
-            val buf = ByteArray(128 * 1024)
-            while (true) {
-                val n = fis.read(buf)
-                if (n <= 0) break
-                digest.update(buf, 0, n)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private val operationInProgress = AtomicBoolean(false)
@@ -235,14 +248,11 @@ object BackupRestoreEngine {
             }
 
             onProgress(4, String.format(Locale.US, "Verifying & inspecting archive (%.1f MB)...", totalMb))
-            val checkResult = validateArchive(context, archiveFile)
-            if (checkResult.isFailure) {
-                return checkResult
-            }
-            val expectedSha = sha256File(archiveFile)
+            val checkResult = validateArchiveAndHash(context, archiveFile)
+            val expectedSha = checkResult.getOrElse { return Result.failure(it) }
 
             onProgress(8, "Stopping background processes...")
-            AntigravityEngine.stopBackgroundProcesses()
+            AntigravityEngine.stopBackgroundProcessesSuspend()
 
             val zstd = resolveZstdBinary(context)
             val tar = resolveTarBinary()
@@ -258,130 +268,152 @@ object BackupRestoreEngine {
 
             onProgress(10, "Extracting Linux environment & Antigravity...")
 
-            val zstdProc = ProcessBuilder(zstd.absolutePath, "-dc").apply {
-                environment().putAll(env)
-            }.start()
+            var zstdProc: Process? = null
+            var patchProc: Process? = null
+            var tarProc: Process? = null
+            try {
+                val zp = ProcessBuilder(zstd.absolutePath, "-dc").apply {
+                    environment().putAll(env)
+                }.start()
+                zstdProc = zp
 
-            val patchProc = ProcessBuilder(patchBin.absolutePath, "--tar").apply {
-                environment().putAll(env)
-            }.start()
+                val pp = ProcessBuilder(patchBin.absolutePath, "--tar").apply {
+                    environment().putAll(env)
+                }.start()
+                patchProc = pp
 
-            val tarProc = ProcessBuilder(
-                tar.absolutePath,
-                "-xf", "-",
-                "-C", stagingDir.absolutePath,
-                "--preserve-permissions"
-            ).apply {
-                environment().putAll(env)
-                redirectErrorStream(true)
-            }.start()
+                val tp = ProcessBuilder(
+                    tar.absolutePath,
+                    "-xf", "-",
+                    "-C", stagingDir.absolutePath,
+                    "--preserve-permissions"
+                ).apply {
+                    environment().putAll(env)
+                    redirectErrorStream(true)
+                }.start()
+                tarProc = tp
 
-            val pipe1Thread = Thread {
-                try {
-                    zstdProc.inputStream.use { zOut ->
-                        patchProc.outputStream.use { pIn ->
+                val pipe1Thread = Thread {
+                    try {
+                        zp.inputStream.use { zOut ->
+                            pp.outputStream.use { pIn ->
+                                val buf = ByteArray(128 * 1024)
+                                while (true) {
+                                    val read = zOut.read(buf)
+                                    if (read <= 0) break
+                                    pIn.write(buf, 0, read)
+                                }
+                                pIn.flush()
+                            }
+                        }
+                    } catch (_: Exception) {
+                    }
+                }.apply { start() }
+
+                val pipeThread = Thread {
+                    try {
+                        pp.inputStream.use { sOut ->
+                            tp.outputStream.use { tIn ->
+                                val buf = ByteArray(128 * 1024)
+                                while (true) {
+                                    val read = sOut.read(buf)
+                                    if (read <= 0) break
+                                    tIn.write(buf, 0, read)
+                                }
+                                tIn.flush()
+                            }
+                        }
+                    } catch (_: Exception) {
+                    }
+                }.apply { start() }
+
+                val tarLog = StringBuilder()
+                val tarLogThread = Thread {
+                    runCatching {
+                        tp.inputStream.bufferedReader().forEachLine {
+                            if (tarLog.length < 4000) tarLog.append(it).append('\n')
+                        }
+                    }
+                }.apply { start() }
+
+                val zstdErr = StringBuilder()
+                val zstdErrThread = Thread {
+                    runCatching {
+                        zp.errorStream.bufferedReader().forEachLine {
+                            if (zstdErr.length < 2000) zstdErr.append(it).append('\n')
+                        }
+                    }
+                }.apply { start() }
+
+                val patchErr = StringBuilder()
+                val patchErrThread = Thread {
+                    runCatching {
+                        pp.errorStream.bufferedReader().forEachLine {
+                            if (patchErr.length < 2000) patchErr.append(it).append('\n')
+                        }
+                    }
+                }.apply { start() }
+
+                var bytesRead = 0L
+                var lastUpdate = 0L
+                val streamDigest = java.security.MessageDigest.getInstance("SHA-256")
+                runCatching {
+                    FileInputStream(archiveFile).use { fis ->
+                        zp.outputStream.use { zIn ->
                             val buf = ByteArray(128 * 1024)
                             while (true) {
-                                val read = zOut.read(buf)
-                                if (read <= 0) break
-                                pIn.write(buf, 0, read)
+                                val n = fis.read(buf)
+                                if (n <= 0) break
+                                streamDigest.update(buf, 0, n)
+                                zIn.write(buf, 0, n)
+                                bytesRead += n
+                                val now = System.currentTimeMillis()
+                                if (now - lastUpdate > 150L) {
+                                    lastUpdate = now
+                                    val pct = 10 + ((bytesRead * 80) / totalBytes).toInt().coerceIn(0, 80)
+                                    val readMb = bytesRead / (1024.0 * 1024.0)
+                                    onProgress(
+                                        pct,
+                                        String.format(Locale.US, "Restoring %.1f / %.1f MB (%d%%)", readMb, totalMb, pct)
+                                    )
+                                }
                             }
-                            pIn.flush()
+                            zIn.flush()
                         }
                     }
-                } catch (_: Exception) {
                 }
-            }.apply { start() }
 
-            val pipeThread = Thread {
-                try {
-                    patchProc.inputStream.use { sOut ->
-                        tarProc.outputStream.use { tIn ->
-                            val buf = ByteArray(128 * 1024)
-                            while (true) {
-                                val read = sOut.read(buf)
-                                if (read <= 0) break
-                                tIn.write(buf, 0, read)
-                            }
-                            tIn.flush()
-                        }
-                    }
-                } catch (_: Exception) {
+                pipe1Thread.join()
+                pipeThread.join()
+                tarLogThread.join()
+                zstdErrThread.join()
+                patchErrThread.join()
+
+                val zstdExit = zp.waitFor()
+                val patchExit = pp.waitFor()
+                val tarExit = tp.waitFor()
+                val actualSha = streamDigest.digest().joinToString("") { "%02x".format(it) }
+
+                if (actualSha != expectedSha) {
+                    return Result.failure(SecurityException("Archive changed during restore (TOCTOU detected)"))
                 }
-            }.apply { start() }
 
-            val tarLog = StringBuilder()
-            val tarLogThread = Thread {
-                runCatching {
-                    tarProc.inputStream.bufferedReader().forEachLine {
-                        if (tarLog.length < 4000) tarLog.append(it).append('\n')
-                    }
+                if (zstdExit != 0 || patchExit != 0 || tarExit != 0) {
+                    return Result.failure(
+                        IllegalStateException("Restore failed (zstd=$zstdExit, patch=$patchExit, tar=$tarExit): $zstdErr $patchErr $tarLog".trim())
+                    )
                 }
-            }.apply { start() }
 
-            val zstdErr = StringBuilder()
-            val zstdErrThread = Thread {
-                runCatching {
-                    zstdProc.errorStream.bufferedReader().forEachLine {
-                        if (zstdErr.length < 2000) zstdErr.append(it).append('\n')
-                    }
+                onProgress(92, "Swapping staged environment...")
+                val swapRes = swapStagedDirs(filesRoot, stagingDir)
+                if (swapRes.isFailure) {
+                    return swapRes
                 }
-            }.apply { start() }
-
-            var bytesRead = 0L
-            var lastUpdate = 0L
-            val streamDigest = java.security.MessageDigest.getInstance("SHA-256")
-            FileInputStream(archiveFile).use { fis ->
-                zstdProc.outputStream.use { zIn ->
-                    val buf = ByteArray(128 * 1024)
-                    while (true) {
-                        val n = fis.read(buf)
-                        if (n <= 0) break
-                        streamDigest.update(buf, 0, n)
-                        zIn.write(buf, 0, n)
-                        bytesRead += n
-                        val now = System.currentTimeMillis()
-                        if (now - lastUpdate > 150L) {
-                            lastUpdate = now
-                            val pct = 10 + ((bytesRead * 80) / totalBytes).toInt().coerceIn(0, 80)
-                            val readMb = bytesRead / (1024.0 * 1024.0)
-                            onProgress(
-                                pct,
-                                String.format(Locale.US, "Restoring %.1f / %.1f MB (%d%%)", readMb, totalMb, pct)
-                            )
-                        }
-                    }
-                    zIn.flush()
-                }
-            }
-
-            pipe1Thread.join()
-            pipeThread.join()
-            tarLogThread.join()
-            zstdErrThread.join()
-
-            val zstdExit = zstdProc.waitFor()
-            val patchExit = patchProc.waitFor()
-            val tarExit = tarProc.waitFor()
-            val actualSha = streamDigest.digest().joinToString("") { "%02x".format(it) }
-
-            if (actualSha != expectedSha) {
+            } finally {
+                runCatching { zstdProc?.destroyForcibly() }
+                runCatching { patchProc?.destroyForcibly() }
+                runCatching { tarProc?.destroyForcibly() }
                 runCatching { stagingDir.deleteRecursively() }
-                return Result.failure(SecurityException("Archive changed during restore (TOCTOU detected)"))
-            }
-
-            if (zstdExit != 0 || patchExit != 0 || tarExit != 0) {
-                runCatching { stagingDir.deleteRecursively() }
-                return Result.failure(
-                    IllegalStateException("Restore failed (zstd=$zstdExit, patch=$patchExit, tar=$tarExit): $zstdErr $tarLog".trim())
-                )
-            }
-
-            onProgress(92, "Swapping staged environment...")
-            val swapRes = swapStagedDirs(filesRoot, stagingDir)
-            runCatching { stagingDir.deleteRecursively() }
-            if (swapRes.isFailure) {
-                return swapRes
             }
 
             onProgress(95, "Fixing permissions & provisioning bridge...")
@@ -533,6 +565,13 @@ object BackupRestoreEngine {
                 "--exclude=./home/.cache",
                 "--exclude=./home/.npm",
                 "--exclude=./home/.agy_bridge/agy.log*",
+                "--exclude=./home/.agy_bridge/bridge.token",
+                "--exclude=./home/.agy_bridge/hub.url",
+                "--exclude=./home/.agy_bridge/hub.pid",
+                "--exclude=./home/.agy_bridge/accounts",
+                "--exclude=./home/.gemini/antigravity-cli/antigravity-oauth-token",
+                "--exclude=./home/.gemini/jetski-standalone-oauth-token",
+                "--exclude=./home/.config/antigravity/credential-user-scope",
                 "--exclude=./home/storage"
             )
             tarCmd.addAll(targets)
