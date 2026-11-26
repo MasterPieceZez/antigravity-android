@@ -17,6 +17,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Validate shell scripts & test agy_patch.c
+        run: |
+          bash -n app/src/main/assets/agy_bridge/start_hub.sh
+          bash -n app/src/main/assets/agy_bridge/dpkg_wrap.sh
+          gcc -O2 -std=c11 -Wall -Wextra -Werror tools/agy_patch.c -o /tmp/agy_patch_host
+          python3 tools/test_agy_patch.py /tmp/agy_patch_host
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -28,7 +35,7 @@ jobs:
         with:
           packages: 'platforms;android-36 build-tools;36.0.0 ndk;29.0.14206865'
 
-      - name: Cross-compile libzstd_cli.so for all Android ABIs
+      - name: Cross-compile libzstd_cli.so and libagy_patch.so (64-bit ABIs)
         run: |
           NDK_BIN="$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin"
           STRIP="$NDK_BIN/llvm-strip"
@@ -51,9 +58,7 @@ jobs:
           }
 
           build_zstd "arm64-v8a" "$NDK_BIN/aarch64-linux-android24-clang"
-          build_zstd "armeabi-v7a" "$NDK_BIN/armv7a-linux-androideabi24-clang"
           build_zstd "x86_64" "$NDK_BIN/x86_64-linux-android24-clang"
-          build_zstd "x86" "$NDK_BIN/i686-linux-android24-clang"
 
           build_patcher() {
             local abi="$1"
@@ -66,9 +71,12 @@ jobs:
           }
 
           build_patcher "arm64-v8a" "$NDK_BIN/aarch64-linux-android24-clang"
-          build_patcher "armeabi-v7a" "$NDK_BIN/armv7a-linux-androideabi24-clang"
           build_patcher "x86_64" "$NDK_BIN/x86_64-linux-android24-clang"
-          build_patcher "x86" "$NDK_BIN/i686-linux-android24-clang"
+
+      - name: Run Android Unit Tests
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest --no-daemon
 
       - name: Decode or Generate CI Release Keystore
         env:
@@ -87,20 +95,21 @@ jobs:
               -dname "CN=Antigravity Android, O=OpenSource, C=US"
             echo "AGY_KEYSTORE_PATH=/tmp/ci-release.jks" >> "$GITHUB_ENV"
             echo "CI_KEYSTORE_PASSWORD=antigravity-ci" >> "$GITHUB_ENV"
-            echo "CI_KEY_ALIAS=antigravity" >> "$GITHUB_ENV"
-            echo "CI_KEY_PASSWORD=antigravity-ci" >> "$GITHUB_ENV"
+            echo "CI_KEYSTORE_ALIAS=antigravity" >> "$GITHUB_ENV"
+            echo "CI_KEYSTORE_KEY_PASS=antigravity-ci" >> "$GITHUB_ENV"
           fi
 
-      - name: Build Standalone Multi-Arch & Universal Release APKs
+      - name: Build Standalone & Universal-Lite Release APKs
         env:
           AGY_KEYSTORE_PASSWORD: ${{ secrets.AGY_KEYSTORE_PASSWORD || env.CI_KEYSTORE_PASSWORD }}
-          AGY_KEY_ALIAS: ${{ secrets.AGY_KEY_ALIAS || env.CI_KEY_ALIAS }}
-          AGY_KEY_PASSWORD: ${{ secrets.AGY_KEY_PASSWORD || env.CI_KEY_PASSWORD }}
+          AGY_KEY_ALIAS: ${{ secrets.AGY_KEY_ALIAS || env.CI_KEYSTORE_ALIAS }}
+          AGY_KEY_PASSWORD: ${{ secrets.AGY_KEY_PASSWORD || env.CI_KEYSTORE_KEY_PASS }}
         run: |
-          chmod +x gradlew
-          ./gradlew :app:assembleRelease --no-daemon
           mkdir -p dist
+          ./gradlew :app:assembleRelease --no-daemon
           cp app/build/outputs/apk/release/AntigravityStandalone-*.apk dist/
+          ./gradlew :app:assembleRelease -PagyLiteUpdate=true --no-daemon
+          cp app/build/outputs/apk/release/AntigravityUpdate-*-lite.apk dist/
 
       - name: Verify APKs with aapt2 & Generate Checksums
         run: |
@@ -114,7 +123,7 @@ jobs:
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Antigravity-${TAG}-APKs
+          name: Antigravity-${{ github.ref_name }}-APKs
           path: dist/*
 
       - name: Publish GitHub Release
@@ -127,10 +136,11 @@ jobs:
           cat > release_notes.md <<'EOF'
           ## Antigravity for Android (__TAG__)
 
-          Self-contained multi-architecture Android client for Google Antigravity (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`, and `universal`) with an embedded Linux runtime, hardware-accelerated fullscreen Web Hub (`agy --hub`), native microphone support for speech-to-text, agent job-completion notifications, and 1-tap offline `.tar.zst` backup & Termux migration.
+          Self-contained 64-bit Android client for Google Antigravity (`arm64-v8a`, `x86_64`, and `universal`) with an embedded Linux runtime, hardware-accelerated fullscreen Web Hub (`agy --hub`), native microphone support for speech-to-text, agent job-completion notifications, and 1-tap offline `.tar.zst` backup & Termux migration.
 
           ### Which APK should I download?
-          - **`AntigravityStandalone-__TAG__-<arch>.apk`**: Pick your device architecture (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`) or **`AntigravityStandalone-__TAG__-universal.apk`** if you aren't sure.
+          - **Fresh install:** `AntigravityStandalone-__TAG__-arm64-v8a.apk` (recommended for phones/tablets), `x86_64`, or `universal`.
+          - **In-place app update (already installed):** `AntigravityUpdate-__TAG__-universal-lite.apk` (preserves your existing Linux/Antigravity environment).
 
           ### SHA-256 Checksums
           ```

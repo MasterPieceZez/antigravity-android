@@ -1,8 +1,9 @@
 package com.termux.app
 
 import android.content.Context
-import com.termux.BuildConfig
+import android.os.Build
 import android.system.Os
+import com.termux.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -11,11 +12,13 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class AntigravityHealth(
     val engineReady: Boolean,
@@ -29,7 +32,8 @@ data class AntigravityHealth(
 data class UpdateReleaseInfo(
     val tagName: String,
     val releaseUrl: String,
-    val liteApkUrl: String?
+    val downloadApkUrl: String?,
+    val isLiteApk: Boolean = false
 )
 
 data class PendingNotification(
@@ -50,13 +54,29 @@ object AntigravityEngine {
     const val HUB_PORT = 4400
     const val BRIDGE_PORT = 4401
 
+    private val startMutex = Mutex()
     private val restartMutex = Mutex()
+    private val provisionLock = Any()
+    private val tokenLock = Any()
+    private val installInProgress = AtomicBoolean(false)
+    @Volatile
+    private var cachedBridgeToken: String? = null
     private val HUB_URL_REGEX = Regex("https?://(?:localhost|127\\.0\\.0\\.1):4400/#t=[A-Za-z0-9._-]+")
 
 
     fun isBootstrapReady(): Boolean = File(BASH_BIN).exists()
 
     fun isAgyInstalled(): Boolean = File(AGY_BIN).exists()
+
+    fun isInstallRunning(): Boolean = installInProgress.get()
+
+    @JvmStatic
+    fun isHubPortListening(): Boolean = isPortOpen(HUB_PORT)
+
+    fun isDeviceAbiSupportedByAgy(): Boolean {
+        val primary = Build.SUPPORTED_ABIS.firstOrNull() ?: return true
+        return primary == "arm64-v8a" || primary == "x86_64"
+    }
 
     fun buildTermuxEnv(): Map<String, String> {
         val env = LinkedHashMap<String, String>()
@@ -73,72 +93,109 @@ object AntigravityEngine {
     }
 
     fun getOrCreateBridgeToken(): String {
-        val tokenFile = File(TOKEN_FILE)
-        if (tokenFile.isFile) {
-            val existing = runCatching { tokenFile.readText().trim() }.getOrNull()
-            if (!existing.isNullOrEmpty() && existing.length >= 32) return existing
+        cachedBridgeToken?.let { return it }
+        synchronized(tokenLock) {
+            cachedBridgeToken?.let { return it }
+            val tokenFile = File(TOKEN_FILE)
+            if (tokenFile.isFile) {
+                val existing = runCatching { tokenFile.readText().trim() }.getOrNull()
+                if (!existing.isNullOrEmpty() && existing.length >= 32) {
+                    runCatching { Os.chmod(tokenFile.absolutePath, 0b110000000) } // 0600
+                    cachedBridgeToken = existing
+                    return existing
+                }
+            }
+            val bytes = ByteArray(32)
+            SecureRandom().nextBytes(bytes)
+            val token = bytes.joinToString("") { "%02x".format(it) }
+            tokenFile.parentFile?.mkdirs()
+            val tmpFile = File(tokenFile.parentFile, "${tokenFile.name}.tmp")
+            tmpFile.writeText("")
+            runCatching { Os.chmod(tmpFile.absolutePath, 0b110000000) } // 0600 before writing secret
+            tmpFile.writeText(token)
+            runCatching { Os.chmod(tmpFile.absolutePath, 0b110000000) }
+            if (!tmpFile.renameTo(tokenFile)) {
+                tokenFile.writeText(token)
+                runCatching { Os.chmod(tokenFile.absolutePath, 0b110000000) }
+                tmpFile.delete()
+            }
+            cachedBridgeToken = token
+            return token
         }
-        val bytes = ByteArray(32)
-        SecureRandom().nextBytes(bytes)
-        val token = bytes.joinToString("") { "%02x".format(it) }
-        tokenFile.parentFile?.mkdirs()
-        tokenFile.writeText(token)
-        runCatching { Os.chmod(tokenFile.absolutePath, 0b110000000) } // 0600
-        return token
     }
 
     fun provisionBridgeAssets(context: Context) {
-        val bridgeDir = File(BRIDGE_DIR)
-        if (!bridgeDir.exists()) bridgeDir.mkdirs()
+        synchronized(provisionLock) {
+            val bridgeDir = File(BRIDGE_DIR)
+            if (!bridgeDir.exists()) bridgeDir.mkdirs()
 
-        getOrCreateBridgeToken()
+            getOrCreateBridgeToken()
 
-        val tmpDir = File("$PREFIX_DIR/tmp")
-        if (!tmpDir.exists()) tmpDir.mkdirs()
+            val tmpDir = File("$PREFIX_DIR/tmp")
+            if (!tmpDir.exists()) tmpDir.mkdirs()
 
-        val storageDir = File("$HOME_DIR/storage")
-        if (!storageDir.exists()) storageDir.mkdirs()
-        val sharedLink = File(storageDir, "shared")
-        if (!sharedLink.exists()) {
-            runCatching { Os.symlink("/storage/emulated/0", sharedLink.absolutePath) }
-        }
+            val storageDir = File("$HOME_DIR/storage")
+            if (!storageDir.exists()) storageDir.mkdirs()
+            val sharedLink = File(storageDir, "shared")
+            if (!sharedLink.exists()) {
+                runCatching { Os.symlink("/storage/emulated/0", sharedLink.absolutePath) }
+            }
 
-        val assetFiles = listOf("start_hub.sh", "dpkg_wrap.sh")
-        for (name in assetFiles) {
-            val outFile = File(bridgeDir, name)
-            context.assets.open("agy_bridge/$name").use { input ->
-                FileOutputStream(outFile).use { output ->
-                    input.copyTo(output)
+            val assetFiles = listOf("start_hub.sh", "dpkg_wrap.sh")
+            for (name in assetFiles) {
+                val outFile = File(bridgeDir, name)
+                val tmpFile = File(bridgeDir, "$name.tmp")
+                context.assets.open("agy_bridge/$name").use { input ->
+                    FileOutputStream(tmpFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                tmpFile.setReadable(true, false)
+                tmpFile.setExecutable(true, false)
+                runCatching { Os.chmod(tmpFile.absolutePath, 0b111101101) } // 0755
+                if (!tmpFile.renameTo(outFile)) {
+                    tmpFile.copyTo(outFile, overwrite = true)
+                    tmpFile.delete()
+                    runCatching { Os.chmod(outFile.absolutePath, 0b111101101) }
                 }
             }
-            outFile.setReadable(true, false)
-            outFile.setExecutable(true, false)
-            runCatching { Os.chmod(outFile.absolutePath, 0b111101101) } // 0755
-        }
 
-        val patchSo = File(context.applicationInfo.nativeLibraryDir, "libagy_patch.so")
-        val patchLink = File(bridgeDir, "agy_patch")
-        if (patchSo.isFile) {
-            runCatching {
-                if (patchLink.exists()) patchLink.delete()
-                Os.symlink(patchSo.absolutePath, patchLink.absolutePath)
+            val patchSo = File(context.applicationInfo.nativeLibraryDir, "libagy_patch.so")
+            val patchLink = File(bridgeDir, "agy_patch")
+            if (patchSo.isFile) {
+                runCatching {
+                    val tmpLink = File(bridgeDir, "agy_patch.tmp")
+                    if (tmpLink.exists()) tmpLink.delete()
+                    Os.symlink(patchSo.absolutePath, tmpLink.absolutePath)
+                    tmpLink.renameTo(patchLink)
+                }
             }
-        }
 
-        val aptConfDir = File("$PREFIX_DIR/etc/apt/apt.conf.d")
-        if (File("$PREFIX_DIR/etc/apt").isDirectory) {
-            aptConfDir.mkdirs()
-            val dpkgWrap = File(bridgeDir, "dpkg_wrap.sh").absolutePath
-            File(aptConfDir, "99agy-dpkg").writeText("Dir::Bin::dpkg \"$dpkgWrap\";\n")
-        }
+            val aptConfDir = File("$PREFIX_DIR/etc/apt/apt.conf.d")
+            if (File("$PREFIX_DIR/etc/apt").isDirectory) {
+                aptConfDir.mkdirs()
+                val dpkgWrap = File(bridgeDir, "dpkg_wrap.sh").absolutePath
+                File(aptConfDir, "99agy-dpkg").writeText("Dir::Bin::dpkg \"$dpkgWrap\";\n")
+            }
 
-        val dpkgBin = File("$PREFIX_DIR/bin/dpkg")
-        val dpkgReal = File("$PREFIX_DIR/bin/dpkg.real")
-        val dpkgWrapFile = File(bridgeDir, "dpkg_wrap.sh")
-        if (dpkgBin.exists() && !dpkgReal.exists() && dpkgWrapFile.exists()) {
-            runCatching {
-                if (dpkgBin.renameTo(dpkgReal)) {
-                    Os.symlink(dpkgWrapFile.absolutePath, dpkgBin.absolutePath)
+            val dpkgBin = File("$PREFIX_DIR/bin/dpkg")
+            val dpkgReal = File("$PREFIX_DIR/bin/dpkg.real")
+            val dpkgWrapFile = File(bridgeDir, "dpkg_wrap.sh")
+            if (dpkgWrapFile.exists() && dpkgBin.exists()) {
+                val target = runCatching { Os.readlink(dpkgBin.absolutePath) }.getOrNull()
+                if (target != dpkgWrapFile.absolutePath) {
+                    runCatching {
+                        if (target == null) {
+                            // Real binary (initial install or overwritten by `apt upgrade dpkg`)
+                            if (dpkgReal.exists()) dpkgReal.delete()
+                            if (dpkgBin.renameTo(dpkgReal)) {
+                                Os.symlink(dpkgWrapFile.absolutePath, dpkgBin.absolutePath)
+                            }
+                        } else {
+                            dpkgBin.delete()
+                            Os.symlink(dpkgWrapFile.absolutePath, dpkgBin.absolutePath)
+                        }
+                    }
                 }
             }
         }
@@ -171,6 +228,28 @@ object AntigravityEngine {
         }
     }
 
+    fun compareSemver(a: String, b: String): Int {
+        val pa = parseSemverParts(a)
+        val pb = parseSemverParts(b)
+        for (i in 0 until maxOf(pa.size, pb.size)) {
+            val va = pa.getOrElse(i) { 0 }
+            val vb = pb.getOrElse(i) { 0 }
+            if (va != vb) return va.compareTo(vb)
+        }
+        return 0
+    }
+
+    private fun parseSemverParts(ver: String): List<Int> {
+        val core = ver.trim().removePrefix("v").removePrefix("V").substringBefore("-").substringBefore("+")
+        if (core.isBlank()) return emptyList()
+        return core.split(".").map { it.toIntOrNull() ?: 0 }
+    }
+
+    fun isNewerVersion(candidateTag: String, currentTag: String): Boolean {
+        if (candidateTag.isBlank()) return false
+        return compareSemver(candidateTag, currentTag) > 0
+    }
+
     suspend fun checkLatestRelease(): Result<UpdateReleaseInfo> = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
@@ -187,19 +266,30 @@ object AntigravityEngine {
             val json = JSONObject(conn.inputStream.bufferedReader().readText())
             val tag = json.optString("tag_name", "").trim()
             val htmlUrl = json.optString("html_url", "https://github.com/MasterPieceZez/antigravity-android/releases")
-            var liteUrl: String? = null
+            val primaryAbi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+            var universalLiteUrl: String? = null
+            var abiLiteUrl: String? = null
+            var abiStandaloneUrl: String? = null
+            var universalStandaloneUrl: String? = null
             val assets = json.optJSONArray("assets")
             if (assets != null) {
                 for (i in 0 until assets.length()) {
                     val a = assets.optJSONObject(i) ?: continue
                     val name = a.optString("name", "")
-                    if (name.contains("lite", ignoreCase = true) && name.endsWith(".apk")) {
-                        liteUrl = a.optString("browser_download_url", "").ifBlank { null }
-                        break
+                    if (!name.endsWith(".apk", ignoreCase = true)) continue
+                    val dlUrl = a.optString("browser_download_url", "").ifBlank { null } ?: continue
+                    val lower = name.lowercase()
+                    when {
+                        lower.contains("universal") && lower.contains("lite") -> universalLiteUrl = dlUrl
+                        lower.contains(primaryAbi.lowercase()) && lower.contains("lite") -> abiLiteUrl = dlUrl
+                        lower.contains(primaryAbi.lowercase()) -> abiStandaloneUrl = dlUrl
+                        lower.contains("universal") -> universalStandaloneUrl = dlUrl
                     }
                 }
             }
-            Result.success(UpdateReleaseInfo(tag, htmlUrl, liteUrl))
+            val bestLite = universalLiteUrl ?: abiLiteUrl
+            val bestApk = bestLite ?: abiStandaloneUrl ?: universalStandaloneUrl
+            Result.success(UpdateReleaseInfo(tag, htmlUrl, bestApk, isLiteApk = bestLite != null))
         } catch (e: Exception) {
             Result.failure(e)
         } finally {
@@ -212,14 +302,28 @@ object AntigravityEngine {
             ?.replace("127.0.0.1:4400", "localhost:4400")
     }
 
-    fun parseHubUrlFromLog(): String? {
+    fun readLogTail(maxBytes: Int = 65536): String {
         val logFile = File(AGY_LOG)
-        if (!logFile.isFile) return null
+        if (!logFile.isFile) return ""
         return try {
-            parseHubUrlFromText(logFile.readText())
+            RandomAccessFile(logFile, "r").use { raf ->
+                val len = raf.length()
+                val start = (len - maxBytes.toLong()).coerceAtLeast(0L)
+                val toRead = (len - start).toInt()
+                raf.seek(start)
+                val buf = ByteArray(toRead)
+                raf.readFully(buf)
+                String(buf, Charsets.UTF_8)
+            }
         } catch (_: Exception) {
-            null
+            ""
         }
+    }
+
+    fun parseHubUrlFromLog(): String? {
+        val tail = readLogTail(65536)
+        if (tail.isEmpty()) return null
+        return parseHubUrlFromText(tail)
     }
 
     fun consumePendingNotification(): PendingNotification? {
@@ -241,14 +345,18 @@ object AntigravityEngine {
 
     suspend fun startHubAndBridge(context: Context) = withContext(Dispatchers.IO) {
         if (!isBootstrapReady()) return@withContext
-        provisionBridgeAssets(context)
-        val pb = ProcessBuilder(BASH_BIN, "$BRIDGE_DIR/start_hub.sh")
-        pb.directory(File(HOME_DIR))
-        pb.environment().putAll(buildTermuxEnv())
-        pb.redirectErrorStream(true)
-        runCatching {
-            val proc = pb.start()
-            proc.waitFor()
+        startMutex.withLock {
+            provisionBridgeAssets(context)
+            val pb = ProcessBuilder(BASH_BIN, "$BRIDGE_DIR/start_hub.sh")
+            pb.directory(File(HOME_DIR))
+            pb.environment().putAll(buildTermuxEnv())
+            pb.redirectErrorStream(true)
+            runCatching {
+                val proc = pb.start()
+                proc.outputStream.close()
+                proc.inputStream.bufferedReader().use { it.readText() }
+                proc.waitFor()
+            }
         }
     }
 
@@ -311,7 +419,8 @@ object AntigravityEngine {
             }
             delay(150L)
         }
-        parseHubUrlFromLog()
+        val fallback = parseHubUrlFromLog()
+        if (fallback != null && isHubHttpReady()) fallback else null
     }
 
     suspend fun restartHub(context: Context): String? = withContext(Dispatchers.IO) {
@@ -332,17 +441,28 @@ object AntigravityEngine {
         context: Context,
         onStatus: (percent: Int, message: String) -> Unit
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!installInProgress.compareAndSet(false, true)) {
+            return@withContext Result.failure(IllegalStateException("Installation is already in progress"))
+        }
         try {
             if (!isBootstrapReady()) {
                 return@withContext Result.failure(IllegalStateException("Embedded Linux bootstrap is not ready"))
             }
+            if (!isDeviceAbiSupportedByAgy()) {
+                val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"
+                return@withContext Result.failure(
+                    IllegalStateException("Unsupported device ABI ($abi). Google Antigravity CLI requires a 64-bit arm64-v8a Android device.")
+                )
+            }
             provisionBridgeAssets(context)
-            onStatus(10, "Updating package index & installing curl + python...")
+            onStatus(10, "Updating package index & installing curl...")
             val script = """
                 set -e
                 export DEBIAN_FRONTEND=noninteractive
-                pkg update -y
-                pkg install -y curl python
+                export APT_LISTCHANGES_FRONTEND=none
+                dpkg --configure -a >/dev/null 2>&1 || true
+                apt-get update -y
+                apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" curl ca-certificates
                 curl -fsSL https://antigravity.google/cli/install.sh | bash
             """.trimIndent()
             val pb = ProcessBuilder(BASH_BIN, "-c", script)
@@ -350,10 +470,14 @@ object AntigravityEngine {
             pb.environment().putAll(buildTermuxEnv())
             pb.redirectErrorStream(true)
             val proc = pb.start()
+            proc.outputStream.close()
             var step = 15
+            val recentLines = ArrayDeque<String>(12)
             proc.inputStream.bufferedReader().forEachLine { line ->
                 val clean = line.trim()
                 if (clean.isNotEmpty()) {
+                    if (recentLines.size >= 10) recentLines.removeFirst()
+                    recentLines.addLast(clean)
                     step = (step + 1).coerceAtMost(92)
                     onStatus(step, clean.take(90))
                 }
@@ -364,10 +488,14 @@ object AntigravityEngine {
                 onStatus(100, "Antigravity CLI installed!")
                 Result.success(Unit)
             } else {
-                Result.failure(IllegalStateException("Installer exited with code $code"))
+                val tailErr = recentLines.takeLast(4).joinToString(" | ").take(240)
+                val detail = if (tailErr.isNotBlank()) "Installer exited with code $code: $tailErr" else "Installer exited with code $code"
+                Result.failure(IllegalStateException(detail))
             }
         } catch (e: Exception) {
             Result.failure(e)
+        } finally {
+            installInProgress.set(false)
         }
     }
 

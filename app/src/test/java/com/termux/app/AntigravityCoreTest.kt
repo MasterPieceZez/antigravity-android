@@ -65,6 +65,7 @@ class AntigravityCoreTest {
         assertTrue(LocalBridgeServer.isAllowedOrigin(null))
         assertTrue(LocalBridgeServer.isAllowedOrigin("http://localhost:4400"))
         assertTrue(LocalBridgeServer.isAllowedOrigin("http://127.0.0.1:4400"))
+        assertFalse(LocalBridgeServer.isAllowedOrigin("file://localhost/etc/passwd"))
         assertFalse(LocalBridgeServer.isAllowedOrigin("https://evil.example.com"))
         assertFalse(LocalBridgeServer.isAllowedOrigin("http://localhost.evil.com"))
 
@@ -72,5 +73,26 @@ class AntigravityCoreTest {
         assertFalse(LocalBridgeServer.isValidToken("wrong-token", "secret-token-123"))
         assertFalse(LocalBridgeServer.isValidToken("", "secret-token-123"))
         assertFalse(LocalBridgeServer.isValidToken(null, "secret-token-123"))
+    }
+
+    @Test
+    fun semverComparison_handlesNumericAndPrereleaseVersions() {
+        assertTrue(AntigravityEngine.isNewerVersion("v1.0.10", "v1.0.2"))
+        assertTrue(AntigravityEngine.isNewerVersion("v1.1.0", "1.0.9"))
+        assertTrue(AntigravityEngine.isNewerVersion("v1.0.1", "v1.0.1-rc1"))
+        assertFalse(AntigravityEngine.isNewerVersion("v1.0.0", "1.0.0"))
+        assertFalse(AntigravityEngine.isNewerVersion("v1.0.0-beta", "v1.0.0"))
+        assertFalse(AntigravityEngine.isNewerVersion("v0.9.9", "v1.0.0"))
+    }
+
+    @Test
+    fun validateArchiveLinkTarget_blocksEscapesAndAllowsSafeTargets() {
+        assertTrue(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/bin/sh", "dash"))
+        assertTrue(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/lib/foo/bar", "../baz"))
+        assertTrue(BackupRestoreEngine.isSafeArchiveLinkTarget("./home/storage/shared", "/storage/emulated/0"))
+        assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "../../etc/passwd"))
+        assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "/etc/passwd"))
+        assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "../secret", isHardLink = true))
+        assertFalse(BackupRestoreEngine.isSafeArchiveLinkTarget("./usr/evil", "/data/data/com.agy.os/files/usr/bin/sh", isHardLink = true))
     }
 }

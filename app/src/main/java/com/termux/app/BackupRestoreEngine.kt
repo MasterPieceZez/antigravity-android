@@ -1,6 +1,7 @@
 package com.termux.app
 
 import android.content.Context
+import android.os.StatFs
 import android.system.Os
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -19,6 +20,8 @@ enum class BackupMode(val slug: String, val label: String) {
 
 object BackupRestoreEngine {
 
+    private const val MIN_RESTORE_FREE_BYTES = 128L * 1024L * 1024L
+
     fun getDownloadsDir(): File = AntigravityFileHelper.getDownloadsDir()
     fun getDefaultMasterBackupFile(): File = File(getDownloadsDir(), "termux-agy-master.tar.zst")
 
@@ -30,14 +33,94 @@ object BackupRestoreEngine {
         return normalized.split('/').none { it == ".." }
     }
 
-    private fun validateArchivePaths(context: Context, archiveFile: File): Result<Unit> {
+    fun isSafeArchiveLinkTarget(entryPath: String, linkTarget: String, isHardLink: Boolean = false): Boolean {
+        val trimmed = linkTarget.trim()
+        if (trimmed.isEmpty() || trimmed.contains('\\')) return false
+        if (isHardLink) return isSafeTarEntryPath(trimmed)
+
+        if (trimmed.startsWith("/")) {
+            return trimmed.startsWith("/data/data/com.termux/") ||
+                trimmed.startsWith("/data/data/com.agy.os/") ||
+                trimmed.startsWith("/storage/") ||
+                trimmed.startsWith("/sdcard/")
+        }
+
+        val entryParts = ArrayDeque<String>()
+        val normalizedEntry = entryPath.trim().replace('\\', '/')
+        val lastSlash = normalizedEntry.lastIndexOf('/')
+        if (lastSlash > 0) {
+            for (seg in normalizedEntry.substring(0, lastSlash).split('/')) {
+                if (seg == "..") return false
+                if (seg.isNotEmpty() && seg != ".") entryParts.addLast(seg)
+            }
+        }
+        for (seg in trimmed.split('/')) {
+            when (seg) {
+                "", "." -> Unit
+                ".." -> {
+                    if (entryParts.isEmpty()) return false
+                    entryParts.removeLast()
+                }
+                else -> entryParts.addLast(seg)
+            }
+        }
+        return true
+    }
+
+    private fun validateArchive(context: Context, archiveFile: File): Result<Unit> {
         return try {
             val zstd = resolveZstdBinary(context)
-            val tar = resolveTarBinary()
+            val patchBin = File(context.applicationInfo.nativeLibraryDir, "libagy_patch.so")
             val env = AntigravityEngine.buildTermuxEnv()
             val zstdProc = ProcessBuilder(zstd.absolutePath, "-dc", archiveFile.absolutePath).apply {
                 environment().putAll(env)
             }.start()
+
+            if (patchBin.isFile) {
+                val checkProc = ProcessBuilder(patchBin.absolutePath, "--check-tar").apply {
+                    environment().putAll(env)
+                    redirectErrorStream(true)
+                }.start()
+                val zstdErr = StringBuilder()
+                val zstdErrThread = Thread {
+                    runCatching {
+                        zstdProc.errorStream.bufferedReader().forEachLine {
+                            if (zstdErr.length < 1000) zstdErr.append(it).append('\n')
+                        }
+                    }
+                }.apply { start() }
+                val checkErr = StringBuilder()
+                val checkErrThread = Thread {
+                    runCatching {
+                        checkProc.inputStream.bufferedReader().forEachLine {
+                            if (checkErr.length < 1000) checkErr.append(it).append('\n')
+                        }
+                    }
+                }.apply { start() }
+                val pipe = Thread {
+                    runCatching {
+                        zstdProc.inputStream.use { zOut ->
+                            checkProc.outputStream.use { cIn -> zOut.copyTo(cIn) }
+                        }
+                    }
+                }.apply { start() }
+                pipe.join()
+                zstdErrThread.join()
+                checkErrThread.join()
+                val zExit = zstdProc.waitFor()
+                val cExit = checkProc.waitFor()
+                return when {
+                    cExit != 0 -> Result.failure(
+                        SecurityException(checkErr.toString().trim().ifBlank { "Archive safety check failed (exit $cExit)" })
+                    )
+                    zExit != 0 -> Result.failure(
+                        IllegalStateException("zstd integrity check failed (exit $zExit): ${zstdErr.toString().trim()}")
+                    )
+                    else -> Result.success(Unit)
+                }
+            }
+
+            val tar = resolveTarBinary()
             val tarProc = ProcessBuilder(tar.absolutePath, "-tf", "-").apply {
                 environment().putAll(env)
                 redirectErrorStream(true)
@@ -144,19 +227,27 @@ object BackupRestoreEngine {
         onProgress: (percent: Int, status: String) -> Unit
     ): Result<Unit> {
         return try {
+            if (!archiveFile.isFile || archiveFile.length() == 0L) {
+                return Result.failure(IllegalArgumentException("Archive file is missing or empty"))
+            }
             val totalBytes = archiveFile.length().coerceAtLeast(1L)
             val totalMb = totalBytes / (1024.0 * 1024.0)
 
-            onProgress(3, String.format(Locale.US, "Verifying archive (%.1f MB)...", totalMb))
-            val verifyResult = verifyArchive(context, archiveFile)
-            if (verifyResult.isFailure) {
-                return verifyResult
+            val filesRoot = File(AntigravityEngine.FILES_DIR).apply { mkdirs() }
+            val availBytes = runCatching { StatFs(filesRoot.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
+            val requiredBytes = (totalBytes * 2L).coerceAtLeast(MIN_RESTORE_FREE_BYTES)
+            if (availBytes < requiredBytes) {
+                val availMb = availBytes / (1024.0 * 1024.0)
+                val reqMb = requiredBytes / (1024.0 * 1024.0)
+                return Result.failure(
+                    IllegalStateException(String.format(Locale.US, "Not enough internal storage (%.0f MB free, need >= %.0f MB)", availMb, reqMb))
+                )
             }
 
-            onProgress(6, "Validating archive paths...")
-            val pathCheck = validateArchivePaths(context, archiveFile)
-            if (pathCheck.isFailure) {
-                return pathCheck
+            onProgress(4, String.format(Locale.US, "Verifying & inspecting archive (%.1f MB)...", totalMb))
+            val checkResult = validateArchive(context, archiveFile)
+            if (checkResult.isFailure) {
+                return checkResult
             }
 
             onProgress(8, "Stopping background processes...")
@@ -309,6 +400,12 @@ object BackupRestoreEngine {
         }
         val tempFile = File(context.cacheDir, "import_backup.tar.zst")
         try {
+            val cacheAvail = runCatching { StatFs(context.cacheDir.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
+            if (cacheAvail < MIN_RESTORE_FREE_BYTES) {
+                return@withContext Result.failure(
+                    IllegalStateException("Not enough free internal storage in cache to stage backup")
+                )
+            }
             onProgress(2, "Copying $displayName...")
             val input = inputStreamProvider() ?: return@withContext Result.failure(
                 IllegalStateException("Unable to open selected file")
@@ -358,14 +455,20 @@ object BackupRestoreEngine {
             return@withContext Result.failure(IllegalStateException("Another backup or restore is already running"))
         }
         try {
+            if (!AntigravityFileHelper.hasPublicDownloadsWriteAccess(context)) {
+                return@withContext Result.failure(
+                    IllegalStateException("Grant All Files Access in Android Settings to save backups to Downloads")
+                )
+            }
             val zstd = resolveZstdBinary(context)
             val tar = resolveTarBinary()
             val env = AntigravityEngine.buildTermuxEnv()
             val filesRoot = File(AntigravityEngine.FILES_DIR)
 
-            val candidates = mutableListOf("./usr", "./home/.local", "./home/.agents")
-            if (mode == BackupMode.FULL) {
-                candidates.add("./home/.gemini")
+            val candidates = if (mode == BackupMode.FULL) {
+                listOf("./usr", "./home")
+            } else {
+                listOf("./usr", "./home/.local", "./home/.agents")
             }
 
             val targets = candidates.filter { rel ->
@@ -378,7 +481,7 @@ object BackupRestoreEngine {
             val downloads = getDownloadsDir()
             if (!downloads.exists()) downloads.mkdirs()
             val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
-            val outFile = File(downloads, "antigravity-${mode.slug}-$stamp.tar.zst")
+            val outFile = AntigravityFileHelper.uniqueFile(downloads, "antigravity-${mode.slug}-$stamp.tar.zst")
 
             onProgress(5, "Archiving & compressing (${mode.label})...")
 
@@ -390,7 +493,9 @@ object BackupRestoreEngine {
                 "--exclude=./usr/tmp/*",
                 "--exclude=./home/.cargo",
                 "--exclude=./home/.cache",
-                "--exclude=./home/.npm"
+                "--exclude=./home/.npm",
+                "--exclude=./home/.agy_bridge/agy.log*",
+                "--exclude=./home/storage"
             )
             tarCmd.addAll(targets)
 
@@ -466,6 +571,7 @@ object BackupRestoreEngine {
             onProgress(92, "Verifying archive with zstd -t...")
             val verify = verifyArchive(context, outFile)
             if (verify.isFailure) {
+                runCatching { outFile.delete() }
                 return@withContext Result.failure(verify.exceptionOrNull() ?: IllegalStateException("Verification failed"))
             }
 

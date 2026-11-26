@@ -1,6 +1,6 @@
 # Antigravity for Android
 
-[![Release](https://img.shields.io/github/v/release/MasterPieceZez/antigravity-android?color=3B82F6&label=release&v=1.0.0)](https://github.com/MasterPieceZez/antigravity-android/releases) [![Build](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml/badge.svg?branch=main&v=1.0.0)](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml) ![ABI](https://img.shields.io/badge/ABI-universal%20%7C%20arm64--v8a%20%7C%20armeabi--v7a%20%7C%20x86__64%20%7C%20x86-14171D) ![License](https://img.shields.io/badge/license-GPL--3.0-22C55E)
+[![Release](https://img.shields.io/github/v/release/MasterPieceZez/antigravity-android?color=3B82F6&label=release&v=1.0.0)](https://github.com/MasterPieceZez/antigravity-android/releases) [![Build](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml/badge.svg?branch=main&v=1.0.0)](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml) ![ABI](https://img.shields.io/badge/ABI-universal%20%7C%20arm64--v8a%20%7C%20x86__64-14171D) ![License](https://img.shields.io/badge/license-GPL--3.0-22C55E)
 
 An unofficial, standalone Android client for Google Antigravity (`agy`). It bundles the Termux Linux bootstrap directly inside the APK, runs `agy --hub` locally on-device with zero PRoot/root overhead, and launches straight into a hardware-accelerated fullscreen Antigravity Web GUI.
 
@@ -19,8 +19,8 @@ An unofficial, standalone Android client for Google Antigravity (`agy`). It bund
 ## Installation
 
 ### Option A: Fresh Install
-1. Download `AntigravityStandalone-v1.0.0-arm64-v8a.apk` (or `universal`) from [Releases](https://github.com/MasterPieceZez/antigravity-android/releases).
-2. Open **Antigravity**, grant **All Files Access** & **Disable Battery Optimization**, and tap **Install Antigravity Automatically**. (Uses isolated package ID `com.agy.os`, so it runs side-by-side with stock Termux and you don't need to uninstall Termux.)
+1. Download `AntigravityStandalone-<version>-arm64-v8a.apk` (or `universal`) from [Releases](https://github.com/MasterPieceZez/antigravity-android/releases). *(64-bit `arm64-v8a` / `x86_64` Android required by Google Antigravity CLI; future in-place upgrades can use `AntigravityUpdate-<version>-universal-lite.apk`.)*
+2. Open **Antigravity**, grant **All Files Access** & **Disable Battery Optimization** (or use built-in `MediaStore` Downloads / `~/inbox` fallbacks), and tap **Install Antigravity Automatically**. (Uses isolated package ID `com.agy.os`, so it runs side-by-side with stock Termux and you don't need to uninstall Termux.)
 
 ### Option B: Port Your Existing Termux Environment
 In your existing stock Termux, run:

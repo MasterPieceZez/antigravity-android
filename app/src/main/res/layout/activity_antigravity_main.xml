@@ -72,12 +72,13 @@
                 android:textSize="14sp"
                 android:textStyle="bold" />
 
-            <!-- Terminal Zoom (- / +) right where it matters -->
             <TextView
                 android:id="@+id/btn_term_zoom_out"
-                android:layout_width="32dp"
-                android:layout_height="30dp"
+                android:layout_width="38dp"
+                android:layout_height="34dp"
                 android:background="@drawable/agy_btn_secondary"
+                android:clickable="true"
+                android:focusable="true"
                 android:gravity="center"
                 android:text="A-"
                 android:textColor="@color/agy_text_primary"
@@ -86,11 +87,13 @@
 
             <TextView
                 android:id="@+id/btn_term_zoom_in"
-                android:layout_width="32dp"
-                android:layout_height="30dp"
+                android:layout_width="38dp"
+                android:layout_height="34dp"
                 android:layout_marginStart="6dp"
                 android:layout_marginEnd="8dp"
                 android:background="@drawable/agy_btn_secondary"
+                android:clickable="true"
+                android:focusable="true"
                 android:gravity="center"
                 android:text="A+"
                 android:textColor="@color/agy_text_primary"
@@ -100,8 +103,10 @@
             <TextView
                 android:id="@+id/btn_close_terminal"
                 android:layout_width="wrap_content"
-                android:layout_height="32dp"
+                android:layout_height="34dp"
                 android:background="@drawable/agy_btn_primary"
+                android:clickable="true"
+                android:focusable="true"
                 android:gravity="center"
                 android:paddingStart="12dp"
                 android:paddingEnd="12dp"
@@ -192,242 +197,327 @@
             android:text="Starting embedded Linux engine..."
             android:textColor="@color/agy_text_secondary"
             android:textSize="13sp" />
+
+        <LinearLayout
+            android:id="@+id/agy_splash_actions"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/btn_splash_retry"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:background="@drawable/agy_btn_primary"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:text="Retry Hub"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btn_splash_terminal"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/agy_btn_secondary"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:text="Terminal"
+                android:textColor="@color/agy_text_primary"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btn_splash_logs"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/agy_btn_secondary"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:text="Logs"
+                android:textColor="@color/agy_text_secondary"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Permission Setup Card -->
-    <LinearLayout
+    <ScrollView
         android:id="@+id/agy_setup_container"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@color/agy_bg"
-        android:gravity="center"
-        android:orientation="vertical"
-        android:padding="24dp"
+        android:fillViewport="true"
         android:visibility="gone">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="@drawable/agy_card_bg"
+            android:gravity="center"
             android:orientation="vertical"
-            android:padding="20dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Device Access Setup"
-                android:textColor="@color/agy_text_primary"
-                android:textSize="18sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="Grant storage and background permissions so Antigravity can access phone files, restore offline backups, and stay alive in the background."
-                android:textColor="@color/agy_text_secondary"
-                android:textSize="13sp" />
-
-            <TextView
-                android:id="@+id/btn_grant_storage"
-                android:layout_width="match_parent"
-                android:layout_height="44dp"
-                android:layout_marginTop="16dp"
-                android:background="@drawable/agy_btn_primary"
-                android:gravity="center"
-                android:text="Grant All Files Access"
-                android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/btn_grant_battery"
-                android:layout_width="match_parent"
-                android:layout_height="44dp"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/agy_btn_secondary"
-                android:gravity="center"
-                android:text="Disable Battery Optimization"
-                android:textColor="@color/agy_text_primary"
-                android:textSize="14sp"
-                android:textStyle="bold" />
+            android:padding="24dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:gravity="end"
-                android:orientation="horizontal">
+                android:background="@drawable/agy_card_bg"
+                android:orientation="vertical"
+                android:padding="20dp">
 
                 <TextView
-                    android:id="@+id/btn_setup_skip"
                     android:layout_width="wrap_content"
-                    android:layout_height="38dp"
-                    android:gravity="center"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp"
-                    android:text="Skip"
+                    android:layout_height="wrap_content"
+                    android:text="Device Access Setup"
+                    android:textColor="@color/agy_text_primary"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="Grant storage and background permissions so Antigravity can access phone files, restore offline backups, and stay alive in the background."
                     android:textColor="@color/agy_text_secondary"
-                    android:textSize="14sp" />
+                    android:textSize="13sp" />
 
                 <TextView
-                    android:id="@+id/btn_setup_continue"
-                    android:layout_width="wrap_content"
-                    android:layout_height="38dp"
-                    android:layout_marginStart="8dp"
-                    android:background="@drawable/agy_btn_secondary"
+                    android:id="@+id/btn_grant_storage"
+                    android:layout_width="match_parent"
+                    android:layout_height="46dp"
+                    android:layout_marginTop="16dp"
+                    android:background="@drawable/agy_btn_primary"
+                    android:clickable="true"
+                    android:focusable="true"
                     android:gravity="center"
-                    android:paddingStart="18dp"
-                    android:paddingEnd="18dp"
-                    android:text="Continue"
+                    android:text="Grant All Files Access"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btn_grant_battery"
+                    android:layout_width="match_parent"
+                    android:layout_height="46dp"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/agy_btn_secondary"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:text="Disable Battery Optimization"
                     android:textColor="@color/agy_text_primary"
                     android:textSize="14sp"
                     android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:gravity="end"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/btn_setup_skip"
+                        android:layout_width="wrap_content"
+                        android:layout_height="42dp"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:text="Skip"
+                        android:textColor="@color/agy_text_secondary"
+                        android:textSize="14sp" />
+
+                    <TextView
+                        android:id="@+id/btn_setup_continue"
+                        android:layout_width="wrap_content"
+                        android:layout_height="42dp"
+                        android:layout_marginStart="8dp"
+                        android:background="@drawable/agy_btn_secondary"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:paddingStart="18dp"
+                        android:paddingEnd="18dp"
+                        android:text="Continue"
+                        android:textColor="@color/agy_text_primary"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
             </LinearLayout>
         </LinearLayout>
-    </LinearLayout>
+    </ScrollView>
 
     <!-- Onboarding Screen -->
-    <LinearLayout
+    <ScrollView
         android:id="@+id/agy_onboarding_container"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@color/agy_bg"
-        android:gravity="center"
-        android:orientation="vertical"
-        android:padding="24dp"
+        android:fillViewport="true"
         android:visibility="gone">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="@drawable/agy_card_bg"
+            android:gravity="center"
             android:orientation="vertical"
-            android:padding="20dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Antigravity Environment Ready"
-                android:textColor="@color/agy_text_primary"
-                android:textSize="18sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/txt_onboarding_subtitle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="Embedded Linux shell is active, but Antigravity CLI (~/.local/bin/agy) is not installed yet."
-                android:textColor="@color/agy_text_secondary"
-                android:textSize="13sp" />
-
-            <TextView
-                android:id="@+id/txt_detected_backup"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/agy_btn_secondary"
-                android:padding="10dp"
-                android:text="Detected: termux-agy-master.tar.zst"
-                android:textColor="@color/agy_ok"
-                android:textSize="12sp"
-                android:visibility="gone" />
-
-            <TextView
-                android:id="@+id/btn_onboarding_auto_install"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:layout_marginTop="16dp"
-                android:background="@drawable/agy_btn_primary"
-                android:gravity="center"
-                android:text="Install Antigravity Automatically"
-                android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/btn_onboarding_import"
-                android:layout_width="match_parent"
-                android:layout_height="46dp"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/agy_btn_secondary"
-                android:gravity="center"
-                android:text="Import Backup / Port Termux (.tar.zst)"
-                android:textColor="@color/agy_text_primary"
-                android:textSize="13sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/btn_onboarding_terminal"
-                android:layout_width="match_parent"
-                android:layout_height="42dp"
-                android:layout_marginTop="8dp"
-                android:background="@drawable/agy_btn_secondary"
-                android:gravity="center"
-                android:text="Open Built-in Terminal"
-                android:textColor="@color/agy_text_secondary"
-                android:textSize="13sp"
-                android:textStyle="bold" />
+            android:padding="24dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
                 android:background="@drawable/agy_card_bg"
                 android:orientation="vertical"
-                android:padding="12dp">
+                android:padding="20dp">
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Porting libraries from stock Termux?"
+                    android:text="Antigravity Environment Ready"
                     android:textColor="@color/agy_text_primary"
-                    android:textSize="12sp"
+                    android:textSize="18sp"
                     android:textStyle="bold" />
 
                 <TextView
+                    android:id="@+id/txt_onboarding_subtitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="Embedded Linux shell is active, but Antigravity CLI (~/.local/bin/agy) is not installed yet."
+                    android:textColor="@color/agy_text_secondary"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/txt_detected_backup"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="Run the export command in stock Termux before uninstalling, then tap Import Backup above to port all your packages offline."
-                    android:textColor="@color/agy_text_secondary"
-                    android:textSize="11sp" />
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/agy_btn_secondary"
+                    android:padding="10dp"
+                    android:text="Detected: termux-agy-master.tar.zst"
+                    android:textColor="@color/agy_ok"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
 
                 <TextView
-                    android:id="@+id/btn_copy_port_cmd"
+                    android:id="@+id/btn_onboarding_auto_install"
                     android:layout_width="match_parent"
-                    android:layout_height="34dp"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="16dp"
+                    android:background="@drawable/agy_btn_primary"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:text="Install Antigravity Automatically"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btn_onboarding_import"
+                    android:layout_width="match_parent"
+                    android:layout_height="46dp"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/agy_btn_secondary"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:text="Import Backup / Port Termux (.tar.zst)"
+                    android:textColor="@color/agy_text_primary"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btn_onboarding_terminal"
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
                     android:layout_marginTop="8dp"
                     android:background="@drawable/agy_btn_secondary"
+                    android:clickable="true"
+                    android:focusable="true"
                     android:gravity="center"
-                    android:text="Copy Termux Port Command"
-                    android:textColor="@color/agy_accent"
-                    android:textSize="12sp"
+                    android:text="Open Built-in Terminal"
+                    android:textColor="@color/agy_text_secondary"
+                    android:textSize="13sp"
                     android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:background="@drawable/agy_card_bg"
+                    android:orientation="vertical"
+                    android:padding="12dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Porting libraries from stock Termux?"
+                        android:textColor="@color/agy_text_primary"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="Run the export command in stock Termux before uninstalling, then tap Import Backup above to port all your packages offline."
+                        android:textColor="@color/agy_text_secondary"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/btn_copy_port_cmd"
+                        android:layout_width="match_parent"
+                        android:layout_height="38dp"
+                        android:layout_marginTop="8dp"
+                        android:background="@drawable/agy_btn_secondary"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:text="Copy Termux Port Command"
+                        android:textColor="@color/agy_accent"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <ProgressBar
+                    android:id="@+id/onboarding_progress_bar"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="8dp"
+                    android:layout_marginTop="14dp"
+                    android:max="100"
+                    android:progress="0"
+                    android:progressTint="@color/agy_accent"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/txt_onboarding_progress"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:textColor="@color/agy_text_secondary"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
             </LinearLayout>
-
-            <ProgressBar
-                android:id="@+id/onboarding_progress_bar"
-                style="?android:attr/progressBarStyleHorizontal"
-                android:layout_width="match_parent"
-                android:layout_height="8dp"
-                android:layout_marginTop="14dp"
-                android:max="100"
-                android:progress="0"
-                android:progressTint="@color/agy_accent"
-                android:visibility="gone" />
-
-            <TextView
-                android:id="@+id/txt_onboarding_progress"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:textColor="@color/agy_text_secondary"
-                android:textSize="12sp"
-                android:visibility="gone" />
         </LinearLayout>
-    </LinearLayout>
+    </ScrollView>
 
     <!-- Sleek Minimal Draggable Floating Pill (Controls + Collapse) -->
     <LinearLayout
@@ -455,8 +545,10 @@
 
         <TextView
             android:id="@+id/pill_btn_collapse"
-            android:layout_width="22dp"
-            android:layout_height="32dp"
+            android:layout_width="28dp"
+            android:layout_height="36dp"
+            android:clickable="true"
+            android:focusable="true"
             android:gravity="center"
             android:text="›"
             android:textColor="@color/agy_text_secondary"

@@ -9,13 +9,17 @@ import android.graphics.Color
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.termux.R
+import java.util.concurrent.atomic.AtomicInteger
 
 object AntigravityNotifier {
     const val PREFS_NAME = "antigravity_prefs"
     const val KEY_NOTIFY_DONE = "notify_agent_done"
     const val KEY_NOTIFY_FOREGROUND = "notify_when_foreground"
     private const val NOTIF_CHANNEL_ID = "antigravity_agent_done"
-    private const val NOTIF_ID_AGENT_DONE = 4402
+    private const val NOTIF_GROUP_KEY = "antigravity_agent_done_group"
+    private const val NOTIF_ID_BASE = 4402
+    private const val NOTIF_SLOT_COUNT = 16
+    private val notifCounter = AtomicInteger(0)
 
     @Volatile
     var isActivityForeground: Boolean = false
@@ -82,11 +86,13 @@ object AntigravityNotifier {
             .setContentText(body.ifBlank { "Agent task finished" })
             .setStyle(NotificationCompat.BigTextStyle().bigText(body.ifBlank { "Agent task finished" }))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setGroup(NOTIF_GROUP_KEY)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .build()
 
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        nm?.notify(NOTIF_ID_AGENT_DONE, notif)
+        val notifId = NOTIF_ID_BASE + (notifCounter.getAndIncrement() and 0x7FFFFFFF) % NOTIF_SLOT_COUNT
+        runCatching { nm?.notify(notifId, notif) }
     }
 }

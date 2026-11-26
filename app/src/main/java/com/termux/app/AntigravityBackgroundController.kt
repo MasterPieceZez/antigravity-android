@@ -1,6 +1,7 @@
 package com.termux.app
 
 import android.content.Context
+import android.os.Build
 import android.os.FileObserver
 import java.io.File
 
@@ -13,6 +14,13 @@ object AntigravityBackgroundController {
     private val lock = Any()
     private var bridgeServer: LocalBridgeServer? = null
     private var notifyFileObserver: FileObserver? = null
+
+    @JvmStatic
+    fun isRunning(): Boolean {
+        synchronized(lock) {
+            return bridgeServer != null
+        }
+    }
 
     @JvmStatic
     fun start(context: Context) {
@@ -28,11 +36,10 @@ object AntigravityBackgroundController {
 
             if (notifyFileObserver == null) {
                 val bridgeDir = File(AntigravityEngine.BRIDGE_DIR).apply { if (!exists()) mkdirs() }
-                @Suppress("DEPRECATION")
-                val observer = object : FileObserver(bridgeDir.absolutePath, CLOSE_WRITE or MOVED_TO) {
-                    override fun onEvent(event: Int, path: String?) {
-                        if (path == "pending_notify.json") {
-                            val pending = AntigravityEngine.consumePendingNotification() ?: return
+                val handleEvent: (String?) -> Unit = { path ->
+                    if (path == "pending_notify.json") {
+                        val pending = AntigravityEngine.consumePendingNotification()
+                        if (pending != null) {
                             AntigravityNotifier.showAgentDoneNotification(
                                 appCtx,
                                 pending.title,
@@ -40,6 +47,17 @@ object AntigravityBackgroundController {
                                 force = false
                             )
                         }
+                    }
+                }
+                val mask = FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO
+                val observer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    object : FileObserver(bridgeDir, mask) {
+                        override fun onEvent(event: Int, path: String?) = handleEvent(path)
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    object : FileObserver(bridgeDir.absolutePath, mask) {
+                        override fun onEvent(event: Int, path: String?) = handleEvent(path)
                     }
                 }
                 runCatching { observer.startWatching() }

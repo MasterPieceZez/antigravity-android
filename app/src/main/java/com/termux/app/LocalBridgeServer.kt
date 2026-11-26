@@ -1,6 +1,7 @@
 package com.termux.app
 
 import android.content.Context
+import com.termux.shared.logger.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -8,6 +9,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
@@ -29,6 +32,7 @@ class LocalBridgeServer(
     private var scope: CoroutineScope? = null
     private var serverSocket: ServerSocket? = null
     private var acceptJob: Job? = null
+    private val clientSemaphore = Semaphore(16)
 
     fun start() {
         if (acceptJob?.isActive == true) return
@@ -44,10 +48,17 @@ class LocalBridgeServer(
                 serverSocket = ss
                 while (isActive && !ss.isClosed) {
                     val client = runCatching { ss.accept() }.getOrNull() ?: break
-                    launch { handleClient(client) }
+                    launch {
+                        clientSemaphore.withPermit {
+                            runCatching { handleClient(client) }
+                                .onFailure { Logger.logDebug("LocalBridgeServer", "Client error: ${it.message}") }
+                        }
+                    }
                 }
-            } catch (_: Exception) {
-                // Port already in use or closed during shutdown
+            } catch (e: Exception) {
+                if (isActive) {
+                    Logger.logError("LocalBridgeServer", "Bridge failed on port ${AntigravityEngine.BRIDGE_PORT}: ${e.message}")
+                }
             }
         }
     }
@@ -69,11 +80,14 @@ class LocalBridgeServer(
 
             val headerBytes = readUntilHeadersEnd(input) ?: return
             val headerText = headerBytes.toString(Charsets.UTF_8)
-            val lines = headerText.split("\r\n")
+            val lines = headerText.split(Regex("\r?\n"))
             if (lines.isEmpty()) return
 
-            val reqParts = lines[0].split(" ")
-            if (reqParts.size < 2) return
+            val reqParts = lines[0].trim().split(Regex("\\s+"))
+            if (reqParts.size < 2) {
+                writeJson(out, 400, JSONObject().put("ok", false).put("error", "bad_request"))
+                return
+            }
             val method = reqParts[0].uppercase()
             val route = reqParts[1].substringBefore("?")
 
@@ -100,7 +114,27 @@ class LocalBridgeServer(
                 return
             }
 
-            val contentLength = headers["content-length"]?.toIntOrNull()?.coerceIn(0, 32768) ?: 0
+            val transferEncoding = headers["transfer-encoding"]?.lowercase()
+            if (transferEncoding != null && transferEncoding.contains("chunked")) {
+                writeJson(out, 501, JSONObject().put("ok", false).put("error", "chunked_unsupported"))
+                return
+            }
+
+            val rawLength = headers["content-length"]
+            val contentLength = if (rawLength != null) {
+                val parsed = rawLength.toIntOrNull()
+                if (parsed == null || parsed < 0) {
+                    writeJson(out, 400, JSONObject().put("ok", false).put("error", "invalid_content_length"))
+                    return
+                }
+                if (parsed > MAX_BODY_BYTES) {
+                    writeJson(out, 413, JSONObject().put("ok", false).put("error", "payload_too_large"))
+                    return
+                }
+                parsed
+            } else {
+                0
+            }
             val bodyBytes = if (contentLength > 0) readExact(input, contentLength) else ByteArray(0)
 
             when {
@@ -172,8 +206,11 @@ class LocalBridgeServer(
         val body = json.toString().toByteArray(Charsets.UTF_8)
         val reason = when (status) {
             200 -> "OK"
+            400 -> "Bad Request"
             403 -> "Forbidden"
             404 -> "Not Found"
+            413 -> "Payload Too Large"
+            501 -> "Not Implemented"
             else -> "Service Unavailable"
         }
         val resp = "HTTP/1.1 $status $reason\r\n" +
@@ -187,9 +224,14 @@ class LocalBridgeServer(
     }
 
     companion object {
+        private const val MAX_BODY_BYTES = 32768
+
         fun isAllowedOrigin(origin: String?): Boolean {
             if (origin.isNullOrBlank()) return true
-            val host = runCatching { URI(origin).host?.lowercase() }.getOrNull() ?: ""
+            val uri = runCatching { URI(origin) }.getOrNull() ?: return false
+            val scheme = uri.scheme?.lowercase() ?: return false
+            if (scheme != "http" && scheme != "https") return false
+            val host = uri.host?.lowercase() ?: return false
             return host == "localhost" || host == "127.0.0.1"
         }
 

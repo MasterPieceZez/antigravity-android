@@ -1,17 +1,36 @@
 package com.termux.app
 
+import android.Manifest
+import android.content.ContentValues
 import android.content.Context
+import android.content.pm.PackageManager
+import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.Base64InputStream
+import androidx.core.content.ContextCompat
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 
 object AntigravityFileHelper {
     private const val MAX_BASE64_DECODED_BYTES = 25L * 1024L * 1024L // 25 MB safety cap
+
+    fun hasPublicDownloadsWriteAccess(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+    }
 
     fun getDownloadsDir(): File {
         val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
@@ -21,6 +40,12 @@ object AntigravityFileHelper {
 
     fun getShareInboxDir(): File {
         val dir = File(getDownloadsDir(), "AntigravityInbox")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getInternalInboxDir(): File {
+        val dir = File(AntigravityEngine.HOME_DIR, "inbox")
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
@@ -77,29 +102,102 @@ object AntigravityFileHelper {
             }
             val safeName = sanitizeFileName(rawFilename, "download")
             val outFile = uniqueFile(getDownloadsDir(), safeName)
-            val b64Stream = Base64InputStream(
-                ByteArrayInputStream(cleanB64.toByteArray(Charsets.US_ASCII)),
-                Base64.DEFAULT
-            )
-            var totalWritten = 0L
-            b64Stream.use { src ->
-                FileOutputStream(outFile).use { dst ->
-                    val buf = ByteArray(64 * 1024)
-                    while (true) {
-                        val n = src.read(buf)
-                        if (n <= 0) break
-                        totalWritten += n
-                        if (totalWritten > MAX_BASE64_DECODED_BYTES) {
-                            runCatching { outFile.delete() }
-                            return Result.failure(IllegalArgumentException("Download exceeds 25 MB limit"))
-                        }
-                        dst.write(buf, 0, n)
-                    }
-                }
+            FileOutputStream(outFile).use { dst ->
+                decodeBase64Stream(cleanB64, dst)
             }
             Result.success(outFile)
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    /**
+     * Context-aware download saver that falls back to MediaStore.Downloads (Android 10+)
+     * or app-external Downloads when All Files Access was not granted.
+     */
+    fun saveBase64ToDownloads(
+        context: Context,
+        rawFilename: String?,
+        base64Data: String,
+        mimeType: String? = null
+    ): Result<String> {
+        val cleanB64 = base64Data.substringAfter("base64,", base64Data).trim()
+        val estimatedBytes = (cleanB64.length.toLong() * 3L) / 4L
+        if (estimatedBytes > MAX_BASE64_DECODED_BYTES) {
+            return Result.failure(IllegalArgumentException("Download exceeds 25 MB limit"))
+        }
+        return saveToDownloadsWithFallback(context, rawFilename, mimeType) { dst ->
+            decodeBase64Stream(cleanB64, dst)
+        }
+    }
+
+    fun saveToDownloadsWithFallback(
+        context: Context,
+        rawFilename: String?,
+        mimeType: String? = null,
+        writer: (OutputStream) -> Unit
+    ): Result<String> {
+        val safeName = sanitizeFileName(rawFilename, "download")
+        if (hasPublicDownloadsWriteAccess(context)) {
+            return runCatching {
+                val outFile = uniqueFile(getDownloadsDir(), safeName)
+                FileOutputStream(outFile).use(writer)
+                runCatching {
+                    MediaScannerConnection.scanFile(context, arrayOf(outFile.absolutePath), null, null)
+                }
+                "Download/${outFile.name}"
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            var insertedUri: Uri? = null
+            return try {
+                val resolver = context.contentResolver
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+                    put(MediaStore.Downloads.MIME_TYPE, mimeType?.ifBlank { null } ?: "application/octet-stream")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: return Result.failure(IllegalStateException("Unable to create entry in Downloads"))
+                insertedUri = uri
+                resolver.openOutputStream(uri)?.use(writer)
+                    ?: return Result.failure(IllegalStateException("Unable to open Downloads output stream"))
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+                Result.success("Download/$safeName")
+            } catch (e: Exception) {
+                insertedUri?.let { runCatching { context.contentResolver.delete(it, null, null) } }
+                Result.failure(e)
+            }
+        }
+        return runCatching {
+            val fallbackDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                ?: File(context.filesDir, "downloads").apply { mkdirs() }
+            val outFile = uniqueFile(fallbackDir, safeName)
+            FileOutputStream(outFile).use(writer)
+            outFile.absolutePath
+        }
+    }
+
+    private fun decodeBase64Stream(cleanB64: String, dst: OutputStream) {
+        val b64Stream = Base64InputStream(
+            ByteArrayInputStream(cleanB64.toByteArray(Charsets.US_ASCII)),
+            Base64.DEFAULT
+        )
+        var totalWritten = 0L
+        b64Stream.use { src ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = src.read(buf)
+                if (n <= 0) break
+                totalWritten += n
+                if (totalWritten > MAX_BASE64_DECODED_BYTES) {
+                    throw IllegalArgumentException("Download exceeds 25 MB limit")
+                }
+                dst.write(buf, 0, n)
+            }
         }
     }
 
@@ -113,11 +211,17 @@ object AntigravityFileHelper {
                 }
             }
             val safeName = sanitizeFileName(rawName, "shared")
-            val outFile = uniqueFile(getShareInboxDir(), safeName)
+            val usePublic = hasPublicDownloadsWriteAccess(context)
+            val targetDir = if (usePublic) getShareInboxDir() else getInternalInboxDir()
+            val outFile = uniqueFile(targetDir, safeName)
             context.contentResolver.openInputStream(uri)?.use { src ->
                 outFile.outputStream().use { dst -> src.copyTo(dst) }
             } ?: return null
-            "~/storage/shared/Download/AntigravityInbox/${outFile.name}"
+            if (usePublic) {
+                "~/storage/shared/Download/AntigravityInbox/${outFile.name}"
+            } else {
+                "~/inbox/${outFile.name}"
+            }
         } catch (_: Exception) {
             null
         }

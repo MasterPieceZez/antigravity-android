@@ -3,9 +3,7 @@ package com.termux.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlertDialog
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
+import android.app.DownloadManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
@@ -13,19 +11,15 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.OnBackPressedCallback
-import android.webkit.URLUtil
-import android.util.Base64
-import android.os.Message
-import android.os.FileObserver
-import android.app.DownloadManager
 import android.os.Environment
 import android.os.IBinder
+import android.os.Message
 import android.os.PowerManager
 import android.provider.OpenableColumns
 import android.provider.Settings
@@ -33,13 +27,13 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
-import androidx.lifecycle.lifecycleScope
-import android.view.ViewGroup
 import android.view.ViewConfiguration
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
+import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -53,25 +47,22 @@ import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.termux.BuildConfig
 import com.termux.R
 import com.termux.shared.logger.Logger
 import com.termux.shared.termux.TermuxConstants.TERMUX_APP.TERMUX_SERVICE
+import com.termux.shared.termux.terminal.TermuxTerminalSessionClientBase
+import com.termux.shared.termux.terminal.io.BellHandler
 import com.termux.terminal.TerminalSession
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -83,16 +74,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     companion object {
         private const val LOG_TAG = "AntigravityMain"
         private const val PREFS_NAME = "antigravity_prefs"
-        private const val KEY_NOTIFY_DONE = "notify_agent_done"
-        private const val KEY_NOTIFY_FOREGROUND = "notify_when_foreground"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         private const val KEY_CPU_WAKELOCK = "cpu_wakelock"
         private const val KEY_PILL_X_FRAC = "pill_x_frac"
         private const val KEY_PILL_Y_FRAC = "pill_y_frac"
         private const val KEY_PILL_COLLAPSED = "pill_collapsed"
         private const val KEY_TERM_TEXT_SIZE = "term_text_size"
-        private const val NOTIF_CHANNEL_ID = "antigravity_agent_done"
-        private const val NOTIF_ID_AGENT_DONE = 4402
     }
 
 
@@ -105,6 +92,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private lateinit var termExtraKeysRow: LinearLayout
     private lateinit var splashContainer: View
     private lateinit var splashStatus: TextView
+    private lateinit var splashActions: View
+    private lateinit var btnSplashRetry: View
+    private lateinit var btnSplashTerminal: View
+    private lateinit var btnSplashLogs: View
     private lateinit var setupContainer: View
     private lateinit var onboardingContainer: View
     private lateinit var floatingPill: LinearLayout
@@ -114,6 +105,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private lateinit var btnGrantStorage: TextView
     private lateinit var btnGrantBattery: TextView
     private lateinit var txtDetectedBackup: TextView
+    private lateinit var btnOnboardingAutoInstall: TextView
+    private lateinit var btnOnboardingImport: TextView
     private lateinit var onboardingProgressBar: ProgressBar
     private lateinit var txtOnboardingProgress: TextView
 
@@ -122,6 +115,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private var bootstrapComplete = false
     private var setupDismissedThisSession = false
     private var currentHubUrl: String? = null
+    @Volatile
+    private var currentWebUrl: String? = null
+    private var isHubReconnectInFlight = false
     private var lastBackPressedMs = 0L
     private var pillCollapsed = false
     private var pillRestored = false
@@ -137,6 +133,57 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private var pendingRestoreSheetProgress: ProgressBar? = null
     private var pendingRestoreSheetStatus: TextView? = null
     private var pendingRestoreDialog: BottomSheetDialog? = null
+
+    private val embeddedSessionClient = object : TermuxTerminalSessionClientBase() {
+        override fun onTextChanged(changedSession: TerminalSession) {
+            if (terminalView.currentSession == changedSession) {
+                terminalView.onScreenUpdated()
+            }
+        }
+
+        override fun onSessionFinished(finishedSession: TerminalSession) {
+            runOnUiThread {
+                if (terminalView.currentSession == finishedSession) {
+                    terminalView.onScreenUpdated()
+                }
+            }
+        }
+
+        override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {
+            if (!text.isNullOrEmpty()) {
+                copyToClipboard("Antigravity Terminal", text)
+            }
+        }
+
+        override fun onPasteTextFromClipboard(session: TerminalSession?) {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+            val clip = cm.primaryClip ?: return
+            if (clip.itemCount > 0) {
+                val text = clip.getItemAt(0)?.coerceToText(this@AntigravityMainActivity)?.toString()
+                if (!text.isNullOrEmpty()) {
+                    terminalView.mEmulator?.paste(text)
+                }
+            }
+        }
+
+        override fun onBell(session: TerminalSession) {
+            BellHandler.getInstance(this@AntigravityMainActivity).doBell()
+        }
+
+        override fun onColorsChanged(changedSession: TerminalSession) {
+            if (terminalView.currentSession == changedSession) {
+                terminalView.invalidate()
+            }
+        }
+
+        override fun onTerminalCursorStateChange(enabled: Boolean) {
+            terminalView.setTerminalCursorBlinkerState(enabled, false)
+        }
+
+        override fun setTerminalShellPid(session: TerminalSession, pid: Int) {
+            termuxService?.getTermuxSessionForTerminalSession(session)?.executionCommand?.mPid = pid
+        }
+    }
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -212,9 +259,6 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         })
         handleIncomingShareIntent(intent)
 
-        if (AntigravityEngine.isBootstrapReady() && AntigravityEngine.isAgyInstalled()) {
-            lifecycleScope.launch { AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity) }
-        }
         val serviceIntent = Intent(this, TermuxService::class.java)
         runCatching { startService(serviceIntent) }
         bindService(serviceIntent, this, Context.BIND_AUTO_CREATE)
@@ -232,28 +276,54 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     }
 
     private fun handleIncomingShareIntent(intent: Intent?) {
-        if (intent == null || intent.action != Intent.ACTION_SEND) return
-        val type = intent.type ?: return
-        if (type.startsWith("text/")) {
-            val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()
-            if (!sharedText.isNullOrEmpty()) {
-                copyToClipboard("Antigravity Share", sharedText)
-                Toast.makeText(this, "Shared text copied — paste into Antigravity", Toast.LENGTH_LONG).show()
+        if (intent == null) return
+        val action = intent.action
+        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return
+        val type = intent.type ?: "*/*"
+
+        val uris = mutableListOf<Uri>()
+        if (action == Intent.ACTION_SEND_MULTIPLE) {
+            @Suppress("DEPRECATION")
+            val list = if (Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+            }
+            if (list != null) uris.addAll(list)
+        } else {
+            @Suppress("DEPRECATION")
+            val singleUri = if (Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM)
+            }
+            if (singleUri != null) uris.add(singleUri)
+        }
+
+        val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()
+        if (uris.isEmpty()) {
+            if (type.startsWith("text/") || !sharedText.isNullOrEmpty()) {
+                if (!sharedText.isNullOrEmpty()) {
+                    copyToClipboard("Antigravity Share", sharedText)
+                    Toast.makeText(this, "Shared text copied — paste into Antigravity", Toast.LENGTH_LONG).show()
+                }
             }
             return
         }
-        @Suppress("DEPRECATION")
-        val uri = if (Build.VERSION.SDK_INT >= 33) {
-            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-        } else {
-            intent.getParcelableExtra(Intent.EXTRA_STREAM)
-        } ?: return
 
         lifecycleScope.launch {
-            val savedPath = withContext(Dispatchers.IO) { AntigravityFileHelper.saveSharedUriToInbox(this@AntigravityMainActivity, uri) }
-            if (savedPath != null) {
-                copyToClipboard("Antigravity File", savedPath)
-                Toast.makeText(this@AntigravityMainActivity, "Saved to $savedPath (path copied)", Toast.LENGTH_LONG).show()
+            val savedPaths = withContext(Dispatchers.IO) {
+                uris.mapNotNull { AntigravityFileHelper.saveSharedUriToInbox(this@AntigravityMainActivity, it) }
+            }
+            if (savedPaths.isNotEmpty()) {
+                val joined = savedPaths.joinToString("\n")
+                copyToClipboard("Antigravity File", joined)
+                val msg = if (savedPaths.size == 1) {
+                    "Saved to ${savedPaths.first()} (path copied)"
+                } else {
+                    "Saved ${savedPaths.size} files to inbox (paths copied)"
+                }
+                Toast.makeText(this@AntigravityMainActivity, msg, Toast.LENGTH_LONG).show()
             } else {
                 Toast.makeText(this@AntigravityMainActivity, "Could not import shared file", Toast.LENGTH_SHORT).show()
             }
@@ -294,8 +364,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     }
 
     private inner class WebNotificationBridge {
+        private fun isTrustedOrigin(): Boolean = AntigravityFileHelper.isLocalhostUri(currentWebUrl)
+
         @JavascriptInterface
         fun notify(title: String?, body: String?) {
+            if (!isTrustedOrigin()) return
             runOnUiThread {
                 showAgentDoneNotification(
                     title = title?.takeIf { it.isNotBlank() } ?: "Antigravity",
@@ -307,6 +380,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         @JavascriptInterface
         fun onAgentJobFinished(summary: String?) {
+            if (!isTrustedOrigin()) return
             runOnUiThread {
                 showAgentDoneNotification(
                     title = "Antigravity",
@@ -318,12 +392,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         @JavascriptInterface
         fun saveDownloadedBase64(filename: String?, base64Data: String?) {
-            if (base64Data.isNullOrBlank()) return
+            if (!isTrustedOrigin() || base64Data.isNullOrBlank()) return
             lifecycleScope.launch(Dispatchers.IO) {
-                val res = AntigravityFileHelper.saveBase64ToDownloads(filename, base64Data)
+                val res = AntigravityFileHelper.saveBase64ToDownloads(this@AntigravityMainActivity, filename, base64Data)
                 withContext(Dispatchers.Main) {
-                    res.onSuccess { f ->
-                        Toast.makeText(this@AntigravityMainActivity, "Saved to Download/${f.name}", Toast.LENGTH_LONG).show()
+                    res.onSuccess { displayPath ->
+                        Toast.makeText(this@AntigravityMainActivity, "Saved to $displayPath", Toast.LENGTH_LONG).show()
                     }.onFailure { err ->
                         Toast.makeText(this@AntigravityMainActivity, "Download failed: ${err.message}", Toast.LENGTH_LONG).show()
                     }
@@ -364,7 +438,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                         var b = btns[i];
                         if (!b.offsetParent) continue;
                         var label = ((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('title') || '') + ' ' + (b.innerText || '')).trim().toLowerCase();
-                        if (label === 'stop' || label === 'cancel' || label.indexOf('stop generating') !== -1 || label.indexOf('stop agent') !== -1) {
+                        if (label === 'stop' || label.indexOf('stop generating') !== -1 || label.indexOf('stop agent') !== -1 || label.indexOf('stop response') !== -1) {
                             return true;
                         }
                     }
@@ -422,6 +496,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         termExtraKeysRow = findViewById(R.id.term_extra_keys_row)
         splashContainer = findViewById(R.id.agy_splash_container)
         splashStatus = findViewById(R.id.agy_splash_status)
+        splashActions = findViewById(R.id.agy_splash_actions)
+        btnSplashRetry = findViewById(R.id.btn_splash_retry)
+        btnSplashTerminal = findViewById(R.id.btn_splash_terminal)
+        btnSplashLogs = findViewById(R.id.btn_splash_logs)
         setupContainer = findViewById(R.id.agy_setup_container)
         onboardingContainer = findViewById(R.id.agy_onboarding_container)
         floatingPill = findViewById(R.id.agy_floating_pill)
@@ -431,6 +509,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         btnGrantStorage = findViewById(R.id.btn_grant_storage)
         btnGrantBattery = findViewById(R.id.btn_grant_battery)
         txtDetectedBackup = findViewById(R.id.txt_detected_backup)
+        btnOnboardingAutoInstall = findViewById(R.id.btn_onboarding_auto_install)
+        btnOnboardingImport = findViewById(R.id.btn_onboarding_import)
         onboardingProgressBar = findViewById(R.id.onboarding_progress_bar)
         txtOnboardingProgress = findViewById(R.id.txt_onboarding_progress)
     }
@@ -456,7 +536,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         settings.databaseEnabled = true
         settings.allowFileAccess = false
         settings.allowContentAccess = true
-        settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         settings.mediaPlaybackRequiresUserGesture = false
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
@@ -485,24 +565,33 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 """.trimIndent()
                 webView.evaluateJavascript(js, null)
             } else if (AntigravityFileHelper.isLocalhostUri(url)) {
-                val safeName = AntigravityFileHelper.sanitizeFileName(guessedName, "download")
                 lifecycleScope.launch(Dispatchers.IO) {
                     var conn: java.net.HttpURLConnection? = null
-                    val savedFile = runCatching {
-                        conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                        conn!!.setRequestProperty("User-Agent", userAgent)
-                        val outFile = AntigravityFileHelper.uniqueFile(AntigravityFileHelper.getDownloadsDir(), safeName)
-                        conn!!.inputStream.use { src ->
-                            outFile.outputStream().use { dst -> src.copyTo(dst) }
+                    val saveResult = runCatching {
+                        conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                            connectTimeout = 5000
+                            readTimeout = 15000
+                            setRequestProperty("User-Agent", userAgent)
                         }
-                        outFile
-                    }.also { conn?.disconnect() }.getOrNull()
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(
+                        val status = conn!!.responseCode
+                        if (status !in 200..299) {
+                            throw IllegalStateException("HTTP $status")
+                        }
+                        val resolvedMime = conn!!.contentType?.substringBefore(';')?.trim()?.ifBlank { null } ?: mimeType
+                        AntigravityFileHelper.saveToDownloadsWithFallback(
                             this@AntigravityMainActivity,
-                            if (savedFile != null) "Saved to Download/${savedFile.name}" else "Download failed",
-                            Toast.LENGTH_LONG
-                        ).show()
+                            guessedName,
+                            resolvedMime
+                        ) { dst ->
+                            conn!!.inputStream.use { src -> src.copyTo(dst) }
+                        }.getOrThrow()
+                    }.also { conn?.disconnect() }
+                    withContext(Dispatchers.Main) {
+                        val toastMsg = saveResult.fold(
+                            onSuccess = { loc -> "Saved to $loc" },
+                            onFailure = { err -> "Download failed: ${err.message}" }
+                        )
+                        Toast.makeText(this@AntigravityMainActivity, toastMsg, Toast.LENGTH_LONG).show()
                     }
                 }
             } else {
@@ -522,6 +611,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         }
 
         webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                currentWebUrl = url
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
                 val host = uri.host?.lowercase(Locale.US) ?: ""
@@ -536,7 +630,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                if (url != null && (url.contains("localhost:4400") || url.contains("127.0.0.1:4400"))) {
+                currentWebUrl = url
+                if (AntigravityFileHelper.isLocalhostUri(url)) {
                     reconnectBanner.visibility = View.GONE
                     injectAgentNotificationBridge()
                 }
@@ -573,9 +668,14 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                         cleanupTemp()
                         return true
                     }
-                    override fun onPageFinished(v: WebView?, url: String?) { cleanupTemp() }
+
+                    override fun onPageFinished(v: WebView?, url: String?) {
+                        if (!url.isNullOrBlank() && url != "about:blank") {
+                            cleanupTemp()
+                        }
+                    }
                 }
-                tempWebView.postDelayed({ cleanupTemp() }, 5000L)
+                tempWebView.postDelayed({ cleanupTemp() }, 8000L)
                 transport.webView = tempWebView
                 resultMsg.sendToTarget()
                 return true
@@ -641,9 +741,14 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         terminalView.setTextSize(terminalTextSize)
         terminalView.setTerminalViewClient(object : TerminalViewClient {
             override fun onScale(scale: Float): Float {
-                val next = (terminalTextSize * scale).toInt().coerceIn(16, 56)
-                updateTerminalFontSize(next)
-                return scale
+                val clampedScale = scale.coerceIn(0.5f, 2.0f)
+                val next = Math.round(terminalTextSize * clampedScale).coerceIn(16, 56)
+                return if (next != terminalTextSize) {
+                    updateTerminalFontSize(next)
+                    1.0f
+                } else {
+                    clampedScale
+                }
             }
 
             override fun onSingleTapUp(e: MotionEvent?) {
@@ -657,7 +762,13 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
             override fun isTerminalViewSelected(): Boolean = terminalContainer.visibility == View.VISIBLE
             override fun copyModeChanged(copyMode: Boolean) {}
-            override fun onKeyDown(keyCode: Int, e: KeyEvent?, session: TerminalSession?): Boolean = false
+            override fun onKeyDown(keyCode: Int, e: KeyEvent?, session: TerminalSession?): Boolean {
+                if (session != null && !session.isRunning && keyCode == KeyEvent.KEYCODE_ENTER) {
+                    ensureBackgroundTerminalSession()
+                    return true
+                }
+                return false
+            }
             override fun onKeyUp(keyCode: Int, e: KeyEvent?): Boolean = false
             override fun onLongPress(event: MotionEvent?): Boolean = false
             override fun readControlKey(): Boolean {
@@ -713,15 +824,23 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private fun buildTerminalExtraKeys() {
         termExtraKeysRow.removeAllViews()
         val dp = resources.displayMetrics.density
+        val specialKeyCodes = mapOf(
+            "__ESC__" to KeyEvent.KEYCODE_ESCAPE,
+            "__TAB__" to KeyEvent.KEYCODE_TAB,
+            "__UP__" to KeyEvent.KEYCODE_DPAD_UP,
+            "__DOWN__" to KeyEvent.KEYCODE_DPAD_DOWN,
+            "__LEFT__" to KeyEvent.KEYCODE_DPAD_LEFT,
+            "__RIGHT__" to KeyEvent.KEYCODE_DPAD_RIGHT
+        )
         val keys = listOf(
-            "ESC" to "\u001b",
-            "TAB" to "\t",
+            "ESC" to "__ESC__",
+            "TAB" to "__TAB__",
             "CTRL" to "__CTRL__",
             "ALT" to "__ALT__",
-            "↑" to "\u001b[A",
-            "↓" to "\u001b[B",
-            "←" to "\u001b[D",
-            "→" to "\u001b[C",
+            "↑" to "__UP__",
+            "↓" to "__DOWN__",
+            "←" to "__LEFT__",
+            "→" to "__RIGHT__",
             "/" to "/",
             "-" to "-",
             "|" to "|",
@@ -737,12 +856,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 setBackgroundResource(R.drawable.agy_btn_secondary)
                 val lp = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
-                    (30 * dp).toInt()
+                    (32 * dp).toInt()
                 ).apply {
                     marginEnd = (6 * dp).toInt()
                 }
                 layoutParams = lp
-                minWidth = (36 * dp).toInt()
+                minWidth = (38 * dp).toInt()
                 setPadding((10 * dp).toInt(), 0, (10 * dp).toInt(), 0)
             }
             if (seq == "__CTRL__") {
@@ -758,8 +877,18 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     updateModifierStyles()
                 }
             } else {
+                val mappedKeyCode = specialKeyCodes[seq]
                 btn.setOnClickListener {
-                    terminalView.currentSession?.write(seq)
+                    if (mappedKeyCode != null) {
+                        terminalView.onKeyDown(mappedKeyCode, KeyEvent(KeyEvent.ACTION_DOWN, mappedKeyCode))
+                    } else {
+                        terminalView.inputCodePoint(
+                            TerminalView.KEY_EVENT_SOURCE_VIRTUAL_KEYBOARD,
+                            seq.codePointAt(0),
+                            false,
+                            false
+                        )
+                    }
                 }
             }
             termExtraKeysRow.addView(btn)
@@ -894,24 +1023,40 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             proceedAfterSetup()
         }
 
-        findViewById<View>(R.id.btn_onboarding_auto_install).setOnClickListener {
+        btnOnboardingAutoInstall.setOnClickListener {
+            if (AntigravityEngine.isInstallRunning()) {
+                Toast.makeText(this@AntigravityMainActivity, "Installation already in progress...", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            btnOnboardingAutoInstall.isEnabled = false
+            btnOnboardingAutoInstall.alpha = 0.6f
             onboardingProgressBar.visibility = View.VISIBLE
             txtOnboardingProgress.visibility = View.VISIBLE
             onboardingProgressBar.progress = 5
             txtOnboardingProgress.text = "Starting automatic Antigravity CLI install..."
             lifecycleScope.launch {
-                val res = AntigravityEngine.installAntigravityCli(this@AntigravityMainActivity) { pct, msg ->
-                    runOnUiThread {
-                        onboardingProgressBar.progress = pct
-                        txtOnboardingProgress.text = msg
+                try {
+                    val res = AntigravityEngine.installAntigravityCli(this@AntigravityMainActivity) { pct, msg ->
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                onboardingProgressBar.progress = pct
+                                txtOnboardingProgress.text = msg
+                            }
+                        }
                     }
-                }
-                res.onSuccess {
-                    Toast.makeText(this@AntigravityMainActivity, "Installed! Booting Antigravity...", Toast.LENGTH_SHORT).show()
-                    bootAntigravityHub()
-                }.onFailure { err ->
-                    txtOnboardingProgress.text = "Install failed: ${err.message}"
-                    Toast.makeText(this@AntigravityMainActivity, "Auto-install failed: ${err.message}", Toast.LENGTH_LONG).show()
+                    if (isFinishing || isDestroyed) return@launch
+                    res.onSuccess {
+                        Toast.makeText(this@AntigravityMainActivity, "Installed! Booting Antigravity...", Toast.LENGTH_SHORT).show()
+                        bootAntigravityHub()
+                    }.onFailure { err ->
+                        txtOnboardingProgress.text = "Install failed: ${err.message}"
+                        Toast.makeText(this@AntigravityMainActivity, "Auto-install failed: ${err.message}", Toast.LENGTH_LONG).show()
+                    }
+                } finally {
+                    if (!isFinishing && !isDestroyed) {
+                        btnOnboardingAutoInstall.isEnabled = true
+                        btnOnboardingAutoInstall.alpha = 1f
+                    }
                 }
             }
         }
@@ -920,7 +1065,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             copyToClipboard("Termux Port Command", cmd)
             Toast.makeText(this, "Copied Termux port command to clipboard", Toast.LENGTH_LONG).show()
         }
-        findViewById<View>(R.id.btn_onboarding_import).setOnClickListener {
+        btnOnboardingImport.setOnClickListener {
             promptRestoreArchive(
                 progressBar = onboardingProgressBar,
                 statusView = txtOnboardingProgress,
@@ -929,6 +1074,15 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         }
         findViewById<View>(R.id.btn_onboarding_terminal).setOnClickListener {
             showTerminalView()
+        }
+        btnSplashRetry.setOnClickListener {
+            bootAntigravityHub()
+        }
+        btnSplashTerminal.setOnClickListener {
+            showTerminalView()
+        }
+        btnSplashLogs.setOnClickListener {
+            showHubLogsDialog()
         }
     }
 
@@ -968,13 +1122,15 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
     private fun ensureBackgroundTerminalSession() {
         val svc = termuxService ?: return
-        val session = if (svc.isTermuxSessionsEmpty) {
-            svc.createTermuxSession(null, null, null, null, false, null)?.terminalSession
-        } else {
-            svc.getTermuxSession(0)?.terminalSession
-        }
+        val existing = (0 until svc.termuxSessionsSize)
+            .asSequence()
+            .mapNotNull { svc.getTermuxSession(it)?.terminalSession }
+            .lastOrNull { it.isRunning }
+        val session = existing ?: svc.createTermuxSession(null, null, null, null, false, null)?.terminalSession
         if (session != null) {
+            session.updateTerminalSessionClient(embeddedSessionClient)
             terminalView.attachSession(session)
+            terminalView.onScreenUpdated()
         }
     }
 
@@ -1032,20 +1188,26 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             if (AntigravityEngine.isAgyInstalled()) {
                 bootAntigravityHub()
             }
-        } else if (bootstrapComplete && webView.visibility == View.VISIBLE && !BackupRestoreEngine.isBusy()) {
+        } else if (bootstrapComplete && webView.visibility == View.VISIBLE && !BackupRestoreEngine.isBusy() && !isHubReconnectInFlight) {
+            isHubReconnectInFlight = true
             lifecycleScope.launch {
-                val alive = withContext(Dispatchers.IO) { AntigravityEngine.isPortOpen(AntigravityEngine.HUB_PORT) }
-                if (!alive && AntigravityEngine.isAgyInstalled()) {
-                    txtReconnectBanner.text = "Reconnecting to Antigravity Hub..."
-                    reconnectBanner.visibility = View.VISIBLE
-                    AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
-                    val newUrl = AntigravityEngine.pollForHubUrl(12000L)
-                    if (newUrl != null) {
-                        currentHubUrl = newUrl
-                        webView.loadUrl(newUrl)
-                    } else {
-                        txtReconnectBanner.text = "Hub offline — tap Control Center to restart"
+                try {
+                    val alive = withContext(Dispatchers.IO) { AntigravityEngine.isPortOpen(AntigravityEngine.HUB_PORT) }
+                    if (!alive && AntigravityEngine.isAgyInstalled()) {
+                        txtReconnectBanner.text = "Reconnecting to Antigravity Hub..."
+                        reconnectBanner.visibility = View.VISIBLE
+                        AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
+                        val newUrl = AntigravityEngine.pollForHubUrl(12000L)
+                        if (newUrl != null) {
+                            currentHubUrl = newUrl
+                            reconnectBanner.visibility = View.GONE
+                            webView.loadUrl(newUrl)
+                        } else {
+                            txtReconnectBanner.text = "Hub offline — tap Control Center to restart"
+                        }
                     }
+                } finally {
+                    isHubReconnectInFlight = false
                 }
             }
         }
@@ -1139,20 +1301,24 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         onboardingContainer.visibility = View.GONE
         setupContainer.visibility = View.GONE
         splashContainer.visibility = View.VISIBLE
+        splashActions.visibility = View.GONE
         splashStatus.text = "Starting Antigravity Hub (port 4400)..."
 
         lifecycleScope.launch {
             AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
             val hubUrl = AntigravityEngine.pollForHubUrl(20000L)
+            if (isFinishing || isDestroyed) return@launch
             if (hubUrl != null) {
                 currentHubUrl = hubUrl
                 splashContainer.visibility = View.GONE
+                splashActions.visibility = View.GONE
                 webView.visibility = View.VISIBLE
                 floatingPill.visibility = View.VISIBLE
                 restorePillPositionIfNeeded()
                 webView.loadUrl(hubUrl)
             } else {
-                splashStatus.text = "Antigravity Hub did not respond on port 4400.\nOpening controls or built-in terminal..."
+                splashStatus.text = "Antigravity Hub did not respond on port 4400.\nCheck logs, retry, or open the terminal."
+                splashActions.visibility = View.VISIBLE
                 floatingPill.visibility = View.VISIBLE
                 restorePillPositionIfNeeded()
                 Toast.makeText(
@@ -1188,10 +1354,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         lifecycleScope.launch {
             val logContent = withContext(Dispatchers.IO) {
                 buildString {
-                    val agyLog = File(AntigravityEngine.AGY_LOG)
                     append("=== agy.log (last 120 lines) ===\n")
-                    if (agyLog.isFile) {
-                        append(agyLog.readLines().takeLast(120).joinToString("\n"))
+                    val tail = AntigravityEngine.readLogTail(65536)
+                    if (tail.isNotEmpty()) {
+                        append(tail.lineSequence().toList().takeLast(120).joinToString("\n"))
                     } else {
                         append("(no log yet)")
                     }
@@ -1260,8 +1426,19 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         val progressBar = view.findViewById<ProgressBar>(R.id.sheet_backup_progress)
         val statusText = view.findViewById<TextView>(R.id.sheet_backup_status)
 
+        var sheetDismissed = false
+        dialog.setOnDismissListener {
+            sheetDismissed = true
+            if (pendingRestoreDialog === dialog) {
+                pendingRestoreDialog = null
+                pendingRestoreSheetProgress = null
+                pendingRestoreSheetStatus = null
+            }
+        }
+
         lifecycleScope.launch {
             val health = AntigravityEngine.getHealth()
+            if (isFinishing || isDestroyed || sheetDismissed) return@launch
             dotEngine.setBackgroundResource(if (health.engineReady) R.drawable.agy_dot_ok else R.drawable.agy_dot_off)
             txtEngine.text = if (health.engineReady) "Embedded Engine: Active (${Build.SUPPORTED_ABIS.firstOrNull() ?: "Linux"})" else "Embedded Engine: Initializing"
 
@@ -1325,13 +1502,19 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             Toast.makeText(this, "Checking GitHub Releases...", Toast.LENGTH_SHORT).show()
             lifecycleScope.launch {
                 val res = AntigravityEngine.checkLatestRelease()
+                if (isFinishing || isDestroyed) return@launch
                 res.onSuccess { info ->
                     val current = "v${BuildConfig.VERSION_NAME}"
-                    if (info.tagName.isNotBlank() && info.tagName != current) {
-                        val dlUrl = info.liteApkUrl ?: info.releaseUrl
+                    if (info.tagName.isNotBlank() && AntigravityEngine.isNewerVersion(info.tagName, current)) {
+                        val dlUrl = info.downloadApkUrl ?: info.releaseUrl
+                        val msg = if (info.isLiteApk) {
+                            "Installed: $current\nLatest: ${info.tagName}\n\nDownload the lightweight universal-lite updater APK?"
+                        } else {
+                            "Installed: $current\nLatest: ${info.tagName}\n\nDownload the updated APK from GitHub Releases?"
+                        }
                         AlertDialog.Builder(this@AntigravityMainActivity)
                             .setTitle("Update Available (${info.tagName})")
-                            .setMessage("Installed: $current\nLatest: ${info.tagName}\n\nDownload the lightweight universal-lite updater APK?")
+                            .setMessage(msg)
                             .setPositiveButton("Download") { _, _ ->
                                 runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dlUrl))) }
                             }
@@ -1458,10 +1641,13 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 }
             }
             result.onSuccess {
-                sheetToDismiss?.dismiss()
+                if (isFinishing || isDestroyed) return@onSuccess
+                if (sheetToDismiss?.isShowing == true) sheetToDismiss.dismiss()
+                pendingRestoreDialog = null
                 Toast.makeText(this@AntigravityMainActivity, "Restore complete! Booting Antigravity...", Toast.LENGTH_SHORT).show()
                 bootAntigravityHub()
             }.onFailure { err ->
+                if (isFinishing || isDestroyed) return@onFailure
                 statusView.text = "Restore failed: ${err.message}"
                 Toast.makeText(this@AntigravityMainActivity, "Restore failed: ${err.message}", Toast.LENGTH_LONG).show()
             }
@@ -1493,12 +1679,16 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 displayName = displayName
             ) { pct, msg ->
                 runOnUiThread {
-                    progressBar.progress = pct
-                    statusView.text = msg
+                    if (!isFinishing && !isDestroyed) {
+                        progressBar.progress = pct
+                        statusView.text = msg
+                    }
                 }
             }
+            if (isFinishing || isDestroyed) return@launch
             result.onSuccess {
-                sheet?.dismiss()
+                if (sheet?.isShowing == true) sheet.dismiss()
+                pendingRestoreDialog = null
                 Toast.makeText(this@AntigravityMainActivity, "Restore complete! Booting Antigravity...", Toast.LENGTH_SHORT).show()
                 bootAntigravityHub()
             }.onFailure { err ->
@@ -1532,6 +1722,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         fileUploadCallback = null
         pendingWebPermissionRequest?.let { runCatching { it.deny() } }
         pendingWebPermissionRequest = null
+        pendingRestoreDialog?.let { if (it.isShowing) runCatching { it.dismiss() } }
+        pendingRestoreDialog = null
         runCatching {
             webView.stopLoading()
             webView.webChromeClient = null
@@ -1540,6 +1732,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             webView.destroy()
         }
         if (isServiceBound) {
+            runCatching { termuxService?.unsetTermuxTerminalSessionClient() }
             runCatching { unbindService(this) }
             isServiceBound = false
         }

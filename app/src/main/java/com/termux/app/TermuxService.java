@@ -170,7 +170,9 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
     public void onDestroy() {
         Logger.logVerbose(LOG_TAG, "onDestroy");
 
-        TermuxShellUtils.clearTermuxTMPDIR(true);
+        if (mWantsToStop || !AntigravityEngine.isHubPortListening()) {
+            TermuxShellUtils.clearTermuxTMPDIR(true);
+        }
 
         actionReleaseWakeLock(false);
         if (!mWantsToStop)
@@ -223,6 +225,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
     /** Process action to stop service. */
     private void actionStopService() {
         mWantsToStop = true;
+        AntigravityEngine.stopBackgroundProcesses();
         killAllTermuxExecutionCommands();
         requestStopService();
     }
@@ -785,18 +788,27 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         Resources res = getResources();
 
         // Set pending intent to be launched when notification is clicked
-        Intent notificationIntent = TermuxActivity.newInstance(this);
-        PendingIntent contentIntent = PendingIntent.getActivity(this, 0, notificationIntent, 0);
+        Intent notificationIntent = new Intent(this, AntigravityMainActivity.class);
+        notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int piFlags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+            ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+            : PendingIntent.FLAG_UPDATE_CURRENT;
+        PendingIntent contentIntent = PendingIntent.getActivity(this, 0, notificationIntent, piFlags);
 
 
         // Set notification text
         int sessionCount = getTermuxSessionsSize();
         int taskCount = mShellManager.mTermuxTasks.size();
-        String notificationText = sessionCount + " session" + (sessionCount == 1 ? "" : "s");
-        if (taskCount > 0) {
-            notificationText += ", " + taskCount + " task" + (taskCount == 1 ? "" : "s");
+        boolean hubAlive = AntigravityEngine.isHubPortListening();
+        String notificationText;
+        if (hubAlive && sessionCount == 0 && taskCount == 0) {
+            notificationText = "Hub active";
+        } else {
+            notificationText = (hubAlive ? "Hub active, " : "") + sessionCount + " session" + (sessionCount == 1 ? "" : "s");
+            if (taskCount > 0) {
+                notificationText += ", " + taskCount + " task" + (taskCount == 1 ? "" : "s");
+            }
         }
-
         final boolean wakeLockHeld = mWakeLock != null;
         if (wakeLockHeld) notificationText += " (wake lock held)";
 
@@ -810,7 +822,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         // Build the notification
         Notification.Builder builder =  NotificationUtils.geNotificationBuilder(this,
             TermuxConstants.TERMUX_APP_NOTIFICATION_CHANNEL_ID, priority,
-            TermuxConstants.TERMUX_APP_NAME, notificationText, null,
+            getString(R.string.antigravity_app_name), notificationText, null,
             contentIntent, null, NotificationUtils.NOTIFICATION_MODE_SILENT);
         if (builder == null)  return null;
 
@@ -818,10 +830,10 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         builder.setShowWhen(false);
 
         // Set notification icon
-        builder.setSmallIcon(R.drawable.ic_service_notification);
+        builder.setSmallIcon(R.drawable.ic_antigravity_notif);
 
         // Set background color for small notification icon
-        builder.setColor(0xFF607D8B);
+        builder.setColor(0xFF3B82F6);
 
         // TermuxSessions are always ongoing
         builder.setOngoing(true);
@@ -829,7 +841,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
         // Set Exit button action
         Intent exitIntent = new Intent(this, TermuxService.class).setAction(TERMUX_SERVICE.ACTION_STOP_SERVICE);
-        builder.addAction(android.R.drawable.ic_delete, res.getString(R.string.notification_action_exit), PendingIntent.getService(this, 0, exitIntent, 0));
+        builder.addAction(android.R.drawable.ic_delete, res.getString(R.string.notification_action_exit), PendingIntent.getService(this, 1, exitIntent, piFlags));
 
 
         // Set Wakelock button actions
@@ -837,7 +849,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         Intent toggleWakeLockIntent = new Intent(this, TermuxService.class).setAction(newWakeAction);
         String actionTitle = res.getString(wakeLockHeld ? R.string.notification_action_wake_unlock : R.string.notification_action_wake_lock);
         int actionIcon = wakeLockHeld ? android.R.drawable.ic_lock_idle_lock : android.R.drawable.ic_lock_lock;
-        builder.addAction(actionIcon, actionTitle, PendingIntent.getService(this, 0, toggleWakeLockIntent, 0));
+        builder.addAction(actionIcon, actionTitle, PendingIntent.getService(this, 2, toggleWakeLockIntent, piFlags));
 
 
         return builder.build();
@@ -852,8 +864,8 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
     /** Update the shown foreground service notification after making any changes that affect it. */
     private synchronized void updateNotification() {
-        if (mWakeLock == null && mShellManager.mTermuxSessions.isEmpty() && mShellManager.mTermuxTasks.isEmpty()) {
-            // Exit if we are updating after the user disabled all locks with no sessions or tasks running.
+        if (mWakeLock == null && mShellManager.mTermuxSessions.isEmpty() && mShellManager.mTermuxTasks.isEmpty() && !AntigravityEngine.isHubPortListening()) {
+            // Exit if we are updating after the user disabled all locks with no sessions, tasks, or Hub running.
             requestStopService();
         } else {
             ((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE)).notify(TermuxConstants.TERMUX_APP_NOTIFICATION_ID, buildNotification());

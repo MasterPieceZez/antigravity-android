@@ -64,24 +64,29 @@ android {
                 }
                 cFlags(*flags)
             }
+            ndk {
+                abiFilters "arm64-v8a", "x86_64"
+            }
         }
     }
 
     splits {
         abi {
-            enable true
+            enable !project.ext.liteUpdate
             reset()
-            include "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
+            include "arm64-v8a", "x86_64"
             universalApk true
         }
     }
 
     signingConfigs {
         debug {
-            storeFile file('testkey_untrusted.jks')
-            keyAlias 'alias'
-            storePassword 'xrj45yWGLbsO7W0v'
-            keyPassword 'xrj45yWGLbsO7W0v'
+            if (file('testkey_untrusted.jks').exists()) {
+                storeFile file('testkey_untrusted.jks')
+                keyAlias 'alias'
+                storePassword 'xrj45yWGLbsO7W0v'
+                keyPassword 'xrj45yWGLbsO7W0v'
+            }
         }
         release {
             def ksPath = System.getenv("AGY_KEYSTORE_PATH")
@@ -138,6 +143,12 @@ android {
         }
     }
 
+    sourceSets {
+        main {
+            jniLibs.srcDirs += "$buildDir/generated/agyJniLibs"
+        }
+    }
+
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
             if (variant.buildType.name == "release") {
@@ -185,8 +196,10 @@ def patchBootstrapZip(File origZip, File outZip) {
     logger.quiet("Patching bootstrap " + origZip.name + " -> com.agy.os ...")
     byte[] oldBytes = "com.termux".getBytes("US-ASCII")
     byte[] newBytes = "com.agy.os".getBytes("US-ASCII")
+    def tmpZip = new File(outZip.parentFile, outZip.name + ".tmp")
     def zis = new java.util.zip.ZipInputStream(new BufferedInputStream(new FileInputStream(origZip)))
-    def zos = new java.util.zip.ZipOutputStream(new BufferedOutputStream(new FileOutputStream(outZip)))
+    def zos = new java.util.zip.ZipOutputStream(new BufferedOutputStream(new FileOutputStream(tmpZip)))
+    boolean ok = false
     try {
         byte[] buf = new byte[16384]
         def entry
@@ -209,10 +222,19 @@ def patchBootstrapZip(File origZip, File outZip) {
             }
             zos.closeEntry()
         }
+        ok = true
     } finally {
         zis.close()
         zos.close()
+        if (!ok) {
+            tmpZip.delete()
+        }
     }
+    java.nio.file.Files.move(
+        tmpZip.toPath(),
+        outZip.toPath(),
+        java.nio.file.StandardCopyOption.REPLACE_EXISTING
+    )
 }
 
 def downloadBootstrap(String arch, String expectedChecksum, String version) {
@@ -247,7 +269,7 @@ def downloadBootstrap(String arch, String expectedChecksum, String version) {
         origFile.parentFile.mkdirs()
         def out = new BufferedOutputStream(new FileOutputStream(origFile))
         def connection = new URL(remoteUrl).openConnection()
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (compatible; Google-Agent; +https://developers.google.com/crawling/docs/crawlers-fetchers/google-agent)")
+        connection.setRequestProperty("User-Agent", "AntigravityAndroid-Build/1.0")
         connection.setInstanceFollowRedirects(true)
         def digestStream = new java.security.DigestInputStream(connection.inputStream, digest)
         out << digestStream
@@ -269,9 +291,45 @@ task downloadBootstraps() {
         if (!project.ext.liteUpdate) {
             def version = "2026.02.12-r1" + "%2B" + "apt.android-7"
             downloadBootstrap("aarch64", "ea2aeba8819e517db711f8c32369e89e7c52cee73e07930ff91185e1ab93f4f3", version)
-            downloadBootstrap("arm", "a38f4d3b2f735f83be2bf54eff463e86dc32a3e2f9f861c1557c4378d249c018", version)
             downloadBootstrap("x86_64", "b7fd0f2e3a4de534be3144f9f91acc768630fc463eaf134ab2e64c545e834f7a", version)
-            downloadBootstrap("i686", "f5bc0b025b9f3b420b5fcaeefc064f888f5f22a0d6fd7090f4aac0c33eb3555b", version)
+        }
+    }
+}
+
+task buildAgyPatchNative() {
+    doLast {
+        def ndkDir = android.ndkDirectory
+        def patchSrc = file("../tools/agy_patch.c")
+        if (!patchSrc.exists() || ndkDir == null || !ndkDir.exists()) return
+        def hostTag = org.gradle.internal.os.OperatingSystem.current().isWindows() ? "windows-x86_64" :
+            (org.gradle.internal.os.OperatingSystem.current().isMacOsX() ? "darwin-x86_64" : "linux-x86_64")
+        def binDir = new File(ndkDir, "toolchains/llvm/prebuilt/${hostTag}/bin")
+        def stripBin = new File(binDir, org.gradle.internal.os.OperatingSystem.current().isWindows() ? "llvm-strip.exe" : "llvm-strip")
+        def abis = [
+            "arm64-v8a": "aarch64-linux-android24-clang",
+            "x86_64": "x86_64-linux-android24-clang"
+        ]
+        abis.each { abi, clangName ->
+            def prebuilt = file("src/main/jniLibs/${abi}/libagy_patch.so")
+            def outDir = new File(buildDir, "generated/agyJniLibs/${abi}")
+            def outFile = new File(outDir, "libagy_patch.so")
+            if (prebuilt.exists()) {
+                if (outFile.exists()) outFile.delete()
+                return
+            }
+            def cc = new File(binDir, org.gradle.internal.os.OperatingSystem.current().isWindows() ? "${clangName}.cmd" : clangName)
+            if (!cc.exists()) return
+            if (outFile.exists() && outFile.lastModified() >= patchSrc.lastModified()) return
+            outDir.mkdirs()
+            exec {
+                commandLine cc.absolutePath, "-O2", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                    "-fPIE", "-pie", patchSrc.absolutePath, "-o", outFile.absolutePath
+            }
+            if (stripBin.exists()) {
+                exec {
+                    commandLine stripBin.absolutePath, outFile.absolutePath
+                }
+            }
         }
     }
 }
@@ -279,6 +337,7 @@ task downloadBootstraps() {
 afterEvaluate {
     android.applicationVariants.all { variant ->
         variant.javaCompileProvider.get().dependsOn(downloadBootstraps)
+        variant.preBuildProvider.get().dependsOn(buildAgyPatchNative)
     }
     tasks.matching { it.name.startsWith("externalNativeBuild") || it.name.startsWith("configureNdkBuild") }.configureEach {
         dependsOn(downloadBootstraps)
