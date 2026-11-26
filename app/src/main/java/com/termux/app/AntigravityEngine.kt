@@ -646,6 +646,7 @@ object AntigravityEngine {
                 export APT_LISTCHANGES_FRONTEND=none
                 dpkg --configure -a >/dev/null 2>&1 || true
                 apt-get update -y
+                apt-get -f install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
                 apt-get upgrade -y --with-new-pkgs -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
                 apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" curl ca-certificates
                 INSTALL_SH="${'$'}TMPDIR/agy_install.sh"

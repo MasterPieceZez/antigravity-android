@@ -1,5 +1,6 @@
 #!/data/data/com.agy.os/files/usr/bin/bash
 set -euo pipefail
+umask 0022
 
 PREFIX="/data/data/com.agy.os/files/usr"
 HOME_DIR="/data/data/com.agy.os/files/home"
@@ -64,7 +65,14 @@ for arg in "$@"; do
                         LC_ALL=C find . -type f ! -path './DEBIAN/*' -print0 | LC_ALL=C sort -z | xargs -0 -r md5sum | sed 's|  \./|  |'
                     ) > "$PKG_DIR/DEBIAN/md5sums"
                 fi
+                chmod 0755 "$PKG_DIR/DEBIAN"
+                for ms in preinst postinst prerm postrm config; do
+                    if [ -f "$PKG_DIR/DEBIAN/$ms" ] && [ ! -L "$PKG_DIR/DEBIAN/$ms" ]; then
+                        chmod 0755 "$PKG_DIR/DEBIAN/$ms"
+                    fi
+                done
                 dpkg-deb -Znone -b "$PKG_DIR" "$OUT_DEB" >/dev/null
+                chmod -R u+rwX "$PKG_DIR" 2>/dev/null || true
                 rm -rf "$PKG_DIR"
                 NEW_ARGS+=("$OUT_DEB")
                 IDX=$((IDX + 1))
