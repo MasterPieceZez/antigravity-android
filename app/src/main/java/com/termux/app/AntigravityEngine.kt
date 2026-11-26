@@ -19,6 +19,7 @@ import java.net.Socket
 import java.net.URL
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 data class AntigravityHealth(
     val engineReady: Boolean,
@@ -61,6 +62,7 @@ object AntigravityEngine {
     private val provisionLock = Any()
     private val tokenLock = Any()
     private val installInProgress = AtomicBoolean(false)
+    private val activeInstallProcess = AtomicReference<Process?>(null)
     @Volatile
     private var cachedBridgeToken: String? = null
     @Volatile
@@ -73,6 +75,10 @@ object AntigravityEngine {
     fun isAgyInstalled(): Boolean = File(AGY_BIN).let { it.isFile && it.length() > 0 }
 
     fun isInstallRunning(): Boolean = installInProgress.get()
+
+    fun cancelInstall() {
+        activeInstallProcess.getAndSet(null)?.destroyForcibly()
+    }
 
     @JvmStatic
     fun isHubListeningCached(): Boolean = cachedHubListening
@@ -541,7 +547,7 @@ object AntigravityEngine {
                 apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" curl ca-certificates
                 INSTALL_SH="${'$'}TMPDIR/agy_install.sh"
                 trap 'rm -f "${'$'}INSTALL_SH"' EXIT
-                curl -fsSL --proto '=https' --tlsv1.2 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh
+                curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 180 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh
                 bash "${'$'}INSTALL_SH"
             """.trimIndent()
             val pb = ProcessBuilder(BASH_BIN, "-c", script)
@@ -549,6 +555,7 @@ object AntigravityEngine {
             pb.environment().putAll(buildTermuxEnv())
             pb.redirectErrorStream(true)
             val proc = pb.start()
+            activeInstallProcess.set(proc)
             proc.outputStream.close()
             var step = 15
             val recentLines = ArrayDeque<String>(12)
@@ -574,6 +581,7 @@ object AntigravityEngine {
         } catch (e: Exception) {
             Result.failure(e)
         } finally {
+            activeInstallProcess.set(null)
             installInProgress.set(false)
         }
     }

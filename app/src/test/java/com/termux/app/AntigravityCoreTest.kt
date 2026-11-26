@@ -175,4 +175,48 @@ class AntigravityCoreTest {
         assertFalse(AntigravityAccountManager.isQuotaExhaustedSignal("Build succeeded in 429 ms"))
         assertFalse(AntigravityAccountManager.isQuotaExhaustedSignal("Hello world"))
     }
+
+    @Test
+    fun swapStagedDirs_packagesOnlyPreservesExistingHomeFiles() {
+        val filesRoot = tempFolder.newFolder("files_root")
+        val existingUsr = java.io.File(filesRoot, "usr").apply { mkdirs() }
+        java.io.File(existingUsr, "old_bin").writeText("old")
+        val existingHome = java.io.File(filesRoot, "home").apply { mkdirs() }
+        java.io.File(existingHome, "my_project.txt").writeText("keep me")
+        java.io.File(existingHome, ".local/bin").apply { mkdirs() }
+        java.io.File(existingHome, ".local/bin/agy").writeText("old-agy")
+
+        val staging = tempFolder.newFolder("staging_pkg")
+        java.io.File(staging, "usr").apply { mkdirs() }
+        java.io.File(staging, "usr/new_bin").writeText("new")
+        java.io.File(staging, "home/.local/bin").apply { mkdirs() }
+        java.io.File(staging, "home/.local/bin/agy").writeText("new-agy")
+        java.io.File(staging, "home/.agents").apply { mkdirs() }
+        java.io.File(staging, "home/.agents/agent.json").writeText("{}")
+
+        val res = BackupRestoreEngine.swapStagedDirs(filesRoot, staging)
+        assertTrue(res.isSuccess)
+        assertEquals("keep me", java.io.File(filesRoot, "home/my_project.txt").readText())
+        assertEquals("new-agy", java.io.File(filesRoot, "home/.local/bin/agy").readText())
+        assertTrue(java.io.File(filesRoot, "home/.agents/agent.json").isFile)
+        assertTrue(java.io.File(filesRoot, "usr/new_bin").isFile)
+        assertFalse(java.io.File(filesRoot, "usr/old_bin").exists())
+    }
+
+    @Test
+    fun swapStagedDirs_fullRestoreReplacesHomeDirectory() {
+        val filesRoot = tempFolder.newFolder("files_root_full")
+        val existingHome = java.io.File(filesRoot, "home").apply { mkdirs() }
+        java.io.File(existingHome, "stale.txt").writeText("old")
+
+        val staging = tempFolder.newFolder("staging_full")
+        java.io.File(staging, "home").apply { mkdirs() }
+        java.io.File(staging, "home/restored.txt").writeText("fresh")
+        java.io.File(staging, "home/.local").apply { mkdirs() }
+
+        val res = BackupRestoreEngine.swapStagedDirs(filesRoot, staging)
+        assertTrue(res.isSuccess)
+        assertEquals("fresh", java.io.File(filesRoot, "home/restored.txt").readText())
+        assertFalse(java.io.File(filesRoot, "home/stale.txt").exists())
+    }
 }

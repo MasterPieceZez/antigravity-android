@@ -467,12 +467,39 @@ object BackupRestoreEngine {
         }
     }
 
-    private fun swapStagedDirs(filesRoot: File, stagingDir: File): Result<Unit> {
+    private val PACKAGES_ONLY_HOME_SUBDIRS = setOf(".local", ".agents")
+
+    internal fun swapStagedDirs(filesRoot: File, stagingDir: File): Result<Unit> {
         val swapped = mutableListOf<Pair<File, File>>()
+        val created = mutableListOf<File>()
         try {
             val children = stagingDir.listFiles() ?: emptyArray()
             for (stagedChild in children) {
                 val target = File(filesRoot, stagedChild.name)
+                if (stagedChild.name == "home" && stagedChild.isDirectory && target.isDirectory) {
+                    val homeEntries = stagedChild.listFiles() ?: emptyArray()
+                    val isPackagesOnlyHome = homeEntries.isNotEmpty() &&
+                        homeEntries.all { it.name in PACKAGES_ONLY_HOME_SUBDIRS }
+                    if (isPackagesOnlyHome) {
+                        for (sub in homeEntries) {
+                            val subTarget = File(target, sub.name)
+                            val subBackup = File(target, "${sub.name}.restore-bak")
+                            if (subBackup.exists()) subBackup.deleteRecursively()
+                            if (subTarget.exists()) {
+                                if (!subTarget.renameTo(subBackup)) {
+                                    throw IllegalStateException("Failed to stage backup of home/${sub.name}")
+                                }
+                                swapped.add(subTarget to subBackup)
+                            } else {
+                                created.add(subTarget)
+                            }
+                            if (!sub.renameTo(subTarget)) {
+                                throw IllegalStateException("Failed to move restored home/${sub.name} into place")
+                            }
+                        }
+                        continue
+                    }
+                }
                 val backup = File(filesRoot, "${stagedChild.name}.restore-bak")
                 if (backup.exists()) backup.deleteRecursively()
                 if (target.exists()) {
@@ -480,6 +507,8 @@ object BackupRestoreEngine {
                         throw IllegalStateException("Failed to stage backup of ${target.name}")
                     }
                     swapped.add(target to backup)
+                } else {
+                    created.add(target)
                 }
                 if (!stagedChild.renameTo(target)) {
                     throw IllegalStateException("Failed to move restored ${stagedChild.name} into place")
@@ -490,6 +519,9 @@ object BackupRestoreEngine {
             }
             return Result.success(Unit)
         } catch (e: Exception) {
+            for (c in created.asReversed()) {
+                runCatching { if (c.exists()) c.deleteRecursively() }
+            }
             for ((target, backup) in swapped.asReversed()) {
                 runCatching {
                     if (target.exists()) target.deleteRecursively()
@@ -532,6 +564,14 @@ object BackupRestoreEngine {
             if (!downloads.exists()) downloads.mkdirs()
             AntigravityFileHelper.uniqueFile(downloads, baseFileName)
         } else {
+            val cacheAvail = runCatching { StatFs(context.cacheDir.absolutePath).availableBytes }
+                .getOrDefault(Long.MAX_VALUE)
+            if (cacheAvail < MIN_RESTORE_FREE_BYTES) {
+                operationInProgress.set(false)
+                return@withContext Result.failure(
+                    IllegalStateException("Not enough free internal storage in cache to stage backup")
+                )
+            }
             File(context.cacheDir, baseFileName)
         }
         try {

@@ -16,6 +16,7 @@ import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
@@ -45,11 +46,13 @@ class LocalBridgeServer(
         scope = s
         acceptJob = s.launch {
             try {
-                val ss = ServerSocket(
-                    AntigravityEngine.BRIDGE_PORT,
-                    16,
-                    InetAddress.getByName("127.0.0.1")
-                ).apply { reuseAddress = true }
+                val ss = ServerSocket().apply {
+                    reuseAddress = true
+                    bind(
+                        InetSocketAddress(InetAddress.getByName("127.0.0.1"), AntigravityEngine.BRIDGE_PORT),
+                        16
+                    )
+                }
                 serverSocket = ss
                 listening = true
                 while (isActive && !ss.isClosed) {

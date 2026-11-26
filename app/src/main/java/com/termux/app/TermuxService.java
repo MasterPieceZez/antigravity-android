@@ -230,10 +230,12 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
     private void actionStopService() {
         mWantsToStop = true;
         AntigravityBackgroundController.stop();
-        AntigravityEngine.stopBackgroundProcesses();
         killAllTermuxExecutionCommands();
         sendBroadcast(new Intent("com.agy.os.ACTION_SERVICE_STOPPED").setPackage(getPackageName()));
-        requestStopService();
+        new Thread(() -> {
+            AntigravityEngine.stopBackgroundProcesses();
+            mHandler.post(this::requestStopService);
+        }, "AgyStopService").start();
     }
 
     /** Kill all TermuxSessions and TermuxTasks by sending SIGKILL to their processes.
