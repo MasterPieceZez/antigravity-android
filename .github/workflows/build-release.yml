@@ -231,9 +231,9 @@ jobs:
           cat SHA256SUMS.txt >> release_notes.md
           echo '```' >> release_notes.md
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --title "$TAG" --notes-file release_notes.md
-            gh release upload "$TAG" *.apk SHA256SUMS.txt --clobber
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file release_notes.md
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" *.apk SHA256SUMS.txt --clobber
           else
-            gh release create "$TAG" *.apk SHA256SUMS.txt --title "$TAG" --notes-file release_notes.md
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" *.apk SHA256SUMS.txt --title "$TAG" --notes-file release_notes.md
           fi
