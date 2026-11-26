@@ -229,20 +229,44 @@ object AntigravityEngine {
     }
 
     fun compareSemver(a: String, b: String): Int {
-        val pa = parseSemverParts(a)
-        val pb = parseSemverParts(b)
+        val (pa, preA) = parseSemver(a)
+        val (pb, preB) = parseSemver(b)
         for (i in 0 until maxOf(pa.size, pb.size)) {
             val va = pa.getOrElse(i) { 0 }
             val vb = pb.getOrElse(i) { 0 }
             if (va != vb) return va.compareTo(vb)
         }
+        if (preA == null && preB == null) return 0
+        if (preA == null) return 1
+        if (preB == null) return -1
+        val partsA = preA.split(".")
+        val partsB = preB.split(".")
+        for (i in 0 until maxOf(partsA.size, partsB.size)) {
+            if (i >= partsA.size) return -1
+            if (i >= partsB.size) return 1
+            val sa = partsA[i]
+            val sb = partsB[i]
+            val na = sa.toIntOrNull()
+            val nb = sb.toIntOrNull()
+            val cmp = when {
+                na != null && nb != null -> na.compareTo(nb)
+                na != null -> -1
+                nb != null -> 1
+                else -> sa.compareTo(sb)
+            }
+            if (cmp != 0) return cmp
+        }
         return 0
     }
 
-    private fun parseSemverParts(ver: String): List<Int> {
-        val core = ver.trim().removePrefix("v").removePrefix("V").substringBefore("-").substringBefore("+")
-        if (core.isBlank()) return emptyList()
-        return core.split(".").map { it.toIntOrNull() ?: 0 }
+    private fun parseSemver(ver: String): Pair<List<Int>, String?> {
+        val cleaned = ver.trim().removePrefix("v").removePrefix("V").substringBefore("+")
+        if (cleaned.isBlank()) return emptyList<Int>() to null
+        val dashIdx = cleaned.indexOf('-')
+        val core = if (dashIdx >= 0) cleaned.substring(0, dashIdx) else cleaned
+        val pre = if (dashIdx >= 0 && dashIdx + 1 < cleaned.length) cleaned.substring(dashIdx + 1) else null
+        val nums = if (core.isBlank()) emptyList() else core.split(".").map { it.toIntOrNull() ?: 0 }
+        return nums to pre
     }
 
     fun isNewerVersion(candidateTag: String, currentTag: String): Boolean {
