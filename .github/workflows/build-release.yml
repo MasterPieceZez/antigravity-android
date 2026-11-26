@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  build-apks:
+  unit-tests:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -35,7 +35,51 @@ jobs:
         with:
           packages: 'platforms;android-36 build-tools;36.0.0 ndk;29.0.14206865'
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run Android Unit Tests
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest --no-daemon
+
+  build-apk:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - variant: standalone
+            lite: 'false'
+          - variant: lite
+            lite: 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK & NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0 ndk;29.0.14206865'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache native tools (libzstd_cli.so & libagy_patch.so)
+        id: cache-native
+        uses: actions/cache@v4
+        with:
+          path: app/src/main/jniLibs
+          key: native-tools-zstd1.5.7-${{ hashFiles('tools/agy_patch.c', '.github/workflows/build-release.yml') }}
+
       - name: Cross-compile libzstd_cli.so and libagy_patch.so (64-bit ABIs)
+        if: steps.cache-native.outputs.cache-hit != 'true'
         run: |
           NDK_BIN="$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin"
           STRIP="$NDK_BIN/llvm-strip"
@@ -73,10 +117,24 @@ jobs:
           build_patcher "arm64-v8a" "$NDK_BIN/aarch64-linux-android24-clang"
           build_patcher "x86_64" "$NDK_BIN/x86_64-linux-android24-clang"
 
-      - name: Run Android Unit Tests
+      - name: Cache Termux bootstraps
+        if: matrix.lite == 'false'
+        id: cache-bootstrap
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/src/main/cpp/bootstrap-*.orig.zip
+            app/src/main/cpp/bootstrap-*.zip
+          key: termux-bootstrap-${{ hashFiles('app/build.gradle') }}
+
+      - name: Refresh patched bootstrap timestamps on cache hit
+        if: matrix.lite == 'false' && steps.cache-bootstrap.outputs.cache-hit == 'true'
         run: |
-          chmod +x gradlew
-          ./gradlew :app:testDebugUnitTest --no-daemon
+          for f in app/src/main/cpp/bootstrap-aarch64.zip app/src/main/cpp/bootstrap-x86_64.zip; do
+            if [ -f "$f" ]; then
+              touch "$f"
+            fi
+          done
 
       - name: Decode or Generate CI Release Keystore
         env:
@@ -99,24 +157,49 @@ jobs:
             echo "CI_KEYSTORE_KEY_PASS=antigravity-ci" >> "$GITHUB_ENV"
           fi
 
-      - name: Build Standalone & Universal-Lite Release APKs
+      - name: Build ${{ matrix.variant }} Release APK(s)
         env:
           AGY_KEYSTORE_PASSWORD: ${{ secrets.AGY_KEYSTORE_PASSWORD || env.CI_KEYSTORE_PASSWORD }}
           AGY_KEY_ALIAS: ${{ secrets.AGY_KEY_ALIAS || env.CI_KEYSTORE_ALIAS }}
           AGY_KEY_PASSWORD: ${{ secrets.AGY_KEY_PASSWORD || env.CI_KEYSTORE_KEY_PASS }}
         run: |
+          chmod +x gradlew
           mkdir -p dist
-          ./gradlew :app:assembleRelease --no-daemon
-          cp app/build/outputs/apk/release/AntigravityStandalone-*.apk dist/
-          ./gradlew :app:assembleRelease -PagyLiteUpdate=true --no-daemon
-          cp app/build/outputs/apk/release/AntigravityUpdate-*-lite.apk dist/
+          if [ "${{ matrix.lite }}" = "true" ]; then
+            ./gradlew :app:assembleRelease -PagyLiteUpdate=true --no-daemon
+            cp app/build/outputs/apk/release/AntigravityUpdate-*-lite.apk dist/
+          else
+            ./gradlew :app:assembleRelease --no-daemon
+            cp app/build/outputs/apk/release/AntigravityStandalone-*.apk dist/
+          fi
 
-      - name: Verify APKs with aapt2 & Generate Checksums
+      - name: Verify APKs with aapt2
         run: |
           for APK in dist/*.apk; do
             echo "=== $APK ==="
             "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$APK" | grep -E "package:|application-label:|targetSdkVersion:|native-code:" || true
           done
+          ls -lh dist/
+
+      - name: Upload ${{ matrix.variant }} APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.variant }}
+          path: dist/*.apk
+
+  publish:
+    needs: [ unit-tests, build-apk ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built APKs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - name: Generate Checksums
+        run: |
           (cd dist && sha256sum *.apk > SHA256SUMS.txt && cat SHA256SUMS.txt)
           ls -lh dist/
 
