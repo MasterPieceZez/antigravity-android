@@ -499,6 +499,7 @@ object AntigravityEngine {
         }
     }
 
+    @JvmStatic
     fun stopBackgroundProcesses() {
         val pkill = File("$PREFIX_DIR/bin/pkill")
         val env = buildTermuxEnv()
