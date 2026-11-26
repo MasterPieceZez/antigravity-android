@@ -85,7 +85,7 @@ object AntigravityFileHelper {
 
     fun isLocalhostUri(url: String?): Boolean {
         if (url.isNullOrBlank()) return false
-        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
         val scheme = uri.scheme?.lowercase() ?: return false
         if (scheme != "http" && scheme != "https") return false
         val host = uri.host?.lowercase() ?: return false
@@ -94,7 +94,7 @@ object AntigravityFileHelper {
 
     fun isTrustedHubUri(url: String?): Boolean {
         if (url.isNullOrBlank()) return false
-        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
         val scheme = uri.scheme?.lowercase() ?: return false
         if (scheme != "http" && scheme != "https") return false
         val host = uri.host?.lowercase() ?: return false
