@@ -136,11 +136,10 @@ jobs:
           cat > release_notes.md <<'EOF'
           ## Antigravity for Android (__TAG__)
 
-          Self-contained 64-bit Android client for Google Antigravity (`arm64-v8a`, `x86_64`, and `universal`) with an embedded Linux runtime, hardware-accelerated fullscreen Web Hub (`agy --hub`), native microphone support for speech-to-text, agent job-completion notifications, and 1-tap offline `.tar.zst` backup & Termux migration.
+          Standalone 64-bit Android build for Google Antigravity (`arm64-v8a`, `x86_64`, and `universal`).
 
-          ### Which APK should I download?
-          - **Fresh install:** `AntigravityStandalone-__TAG__-arm64-v8a.apk` (recommended for phones/tablets), `x86_64`, or `universal`.
-          - **In-place app update (already installed):** `AntigravityUpdate-__TAG__-universal-lite.apk` (preserves your existing Linux/Antigravity environment).
+          - **Fresh install:** `AntigravityStandalone-__TAG__-arm64-v8a.apk` (recommended for most devices), `x86_64`, or `universal`.
+          - **In-place update (already installed):** `AntigravityUpdate-__TAG__-universal-lite.apk` (keeps your existing environment intact).
 
           ### SHA-256 Checksums
           ```
