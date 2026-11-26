@@ -7,8 +7,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static const char OLD_PKG[10] = "com.termux";
-static const char NEW_PKG[10] = "com.agy.os";
+static const char OLD_PKG[] = "com.termux";
+static const char NEW_PKG[] = "com.agy.os";
 #define PKG_LEN 10
 #define MAX_TAR_PATH 8192
 

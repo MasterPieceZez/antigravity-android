@@ -321,14 +321,16 @@ task buildAgyPatchNative() {
             if (!cc.exists()) return
             if (outFile.exists() && outFile.lastModified() >= patchSrc.lastModified()) return
             outDir.mkdirs()
-            exec {
-                commandLine cc.absolutePath, "-O2", "-std=c11", "-Wall", "-Wextra", "-Werror",
-                    "-fPIE", "-pie", patchSrc.absolutePath, "-o", outFile.absolutePath
+            def proc = new ProcessBuilder(
+                cc.absolutePath, "-O2", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                "-fPIE", "-pie", patchSrc.absolutePath, "-o", outFile.absolutePath
+            ).inheritIO().start()
+            if (proc.waitFor() != 0) {
+                throw new GradleException("Failed to compile libagy_patch.so for ${abi}")
             }
             if (stripBin.exists()) {
-                exec {
-                    commandLine stripBin.absolutePath, outFile.absolutePath
-                }
+                def stripProc = new ProcessBuilder(stripBin.absolutePath, outFile.absolutePath).inheritIO().start()
+                stripProc.waitFor()
             }
         }
     }
