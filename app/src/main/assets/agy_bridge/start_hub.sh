@@ -10,13 +10,14 @@ export LANG="en_US.UTF-8"
 export RES_OPTIONS="attempts:2 timeout:2"
 export AGY_ENABLE_HUB=1
 export AGY_CLI_DISABLE_AUTO_UPDATE=1
+export BROWSER="$HOME/.local/bin/xdg-open"
 
 BRIDGE_DIR="$HOME/.agy_bridge"
 AGY_BIN="$HOME/.local/bin/agy"
 AGY_LOG="$BRIDGE_DIR/agy.log"
 LOCK_DIR="$BRIDGE_DIR/hub.lock"
 
-mkdir -p "$BRIDGE_DIR" "$TMPDIR" "$HOME/storage"
+mkdir -p "$BRIDGE_DIR" "$TMPDIR" "$HOME/storage" "$HOME/.local/bin"
 
 # Ensure fast localhost DNS resolution (avoids IPv6 stalls on mobile data)
 HOSTS_FILE="$PREFIX/etc/hosts"
@@ -96,20 +97,29 @@ if [ -f "$AGY_BIN" ]; then
     if [ "$ACQUIRED" -eq 1 ]; then
         trap 'rm -rf "$LOCK_DIR" 2>/dev/null || true' EXIT
     else
+        printf '[start_hub] Lock busy (%s); skipping launch\n' "$LOCK_DIR" >> "$AGY_LOG" 2>/dev/null || true
         exit 0
     fi
 
     if ! is_hub_running; then
-        rm -f "$BRIDGE_DIR/hub.url" 2>/dev/null || true
+        rm -f "$BRIDGE_DIR/hub.url" "$BRIDGE_DIR/pending_open_url" 2>/dev/null || true
         if [ -f "$AGY_LOG" ] && [ -s "$AGY_LOG" ]; then
             mv -f "$AGY_LOG" "$AGY_LOG.prev" 2>/dev/null || true
         fi
-        : > "$AGY_LOG"
-        if command -v setsid >/dev/null 2>&1; then
-            setsid "$AGY_BIN" --hub --hub-port=4400 > "$AGY_LOG" 2>&1 < /dev/null &
-        else
-            nohup "$AGY_BIN" --hub --hub-port=4400 > "$AGY_LOG" 2>&1 < /dev/null &
+        printf '[start_hub] Launching %s --hub --hub-port=4400\n' "$AGY_BIN" > "$AGY_LOG" 2>/dev/null || true
+        CMD=("$AGY_BIN" --hub --hub-port=4400)
+        if command -v stdbuf >/dev/null 2>&1; then
+            CMD=(stdbuf -oL -eL "${CMD[@]}")
         fi
-        printf '%s\n' "$!" > "$BRIDGE_DIR/hub.pid" 2>/dev/null || true
+        if command -v setsid >/dev/null 2>&1; then
+            setsid "${CMD[@]}" >> "$AGY_LOG" 2>&1 < /dev/null &
+        else
+            nohup "${CMD[@]}" >> "$AGY_LOG" 2>&1 < /dev/null &
+        fi
+        HUB_PID=$!
+        printf '%s\n' "$HUB_PID" > "$BRIDGE_DIR/hub.pid" 2>/dev/null || true
+        printf '[start_hub] Started PID %s\n' "$HUB_PID" >> "$AGY_LOG" 2>/dev/null || true
     fi
+else
+    printf '[start_hub] Binary not found: %s\n' "$AGY_BIN" >> "$AGY_LOG" 2>/dev/null || true
 fi

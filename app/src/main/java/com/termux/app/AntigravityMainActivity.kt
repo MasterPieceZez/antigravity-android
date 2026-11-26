@@ -1147,7 +1147,14 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         lifecycleScope.launch {
             try {
                 AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
-                val hubUrl = AntigravityEngine.pollForHubUrl(20000L)
+                val hubUrl = AntigravityEngine.pollForHubUrl(20000L) { oauthUrl ->
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) {
+                            splashStatus.text = "Complete Google Sign-In in browser..."
+                            openExternalUri(Uri.parse(oauthUrl))
+                        }
+                    }
+                }
                 if (isFinishing || isDestroyed) return@launch
                 if (hubUrl != null) {
                     currentHubUrl = hubUrl
@@ -1203,7 +1210,14 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     if (tail.isNotEmpty()) {
                         append(tail.lineSequence().toList().takeLast(120).joinToString("\n"))
                     } else {
-                        append("(no log yet)")
+                        val prevFile = File("${AntigravityEngine.AGY_LOG}.prev")
+                        val prevText = runCatching { prevFile.takeIf { it.isFile }?.readText()?.trim() }.getOrNull()
+                        if (!prevText.isNullOrEmpty()) {
+                            append("(current agy.log empty — showing previous log)\n")
+                            append(prevText.lineSequence().toList().takeLast(80).joinToString("\n"))
+                        } else {
+                            append("(no log yet — hubListening=${AntigravityEngine.isPortOpen(AntigravityEngine.HUB_PORT, 150)}, agyInstalled=${AntigravityEngine.isAgyInstalled()})")
+                        }
                     }
                 }
             }
@@ -1302,7 +1316,14 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     cm.removeAllCookies(null)
                     cm.flush()
                 }
-                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity)
+                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity) { oauthUrl ->
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) {
+                            txtReconnectBanner.text = "Complete Google Sign-In in browser..."
+                            openExternalUri(Uri.parse(oauthUrl))
+                        }
+                    }
+                }
                 if (isFinishing || isDestroyed) return@launch
                 if (newUrl != null) {
                     currentHubUrl = newUrl

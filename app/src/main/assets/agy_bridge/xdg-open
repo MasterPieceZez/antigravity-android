@@ -1,0 +1,21 @@
+#!/data/data/com.agy.os/files/usr/bin/bash
+set -u
+
+URL="${1:-}"
+if [ -z "$URL" ]; then
+    exit 0
+fi
+
+HOME_DIR="/data/data/com.agy.os/files/home"
+BRIDGE_DIR="$HOME_DIR/.agy_bridge"
+mkdir -p "$BRIDGE_DIR"
+
+case "$URL" in
+    http://*|https://*)
+        TMP_FILE="$BRIDGE_DIR/pending_open_url.tmp.$$"
+        printf '%s\n' "$URL" > "$TMP_FILE" 2>/dev/null || true
+        mv -f "$TMP_FILE" "$BRIDGE_DIR/pending_open_url" 2>/dev/null || true
+        printf '[xdg-open] %s\n' "$URL" >> "$BRIDGE_DIR/agy.log" 2>/dev/null || true
+        ;;
+esac
+exit 0

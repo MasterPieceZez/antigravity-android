@@ -1,6 +1,8 @@
 package com.termux.app
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.FileObserver
 import kotlinx.coroutines.CoroutineScope
@@ -95,6 +97,16 @@ object AntigravityBackgroundController {
                         pending.body,
                         force = false
                     )
+                }
+            } else if (path == "pending_open_url" && !AntigravityEngine.externalUrlHandlerActive) {
+                val url = AntigravityEngine.consumePendingOpenUrl()
+                if (url != null) {
+                    runCatching {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        appCtx.startActivity(intent)
+                    }
                 }
             }
         }

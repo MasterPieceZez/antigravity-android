@@ -54,6 +54,7 @@ object AntigravityEngine {
     const val HUB_URL_FILE = "$BRIDGE_DIR/hub.url"
     const val HUB_PID_FILE = "$BRIDGE_DIR/hub.pid"
     const val NOTIFY_FILE = "$BRIDGE_DIR/pending_notify.json"
+    const val PENDING_OPEN_URL_FILE = "$BRIDGE_DIR/pending_open_url"
     const val TOKEN_FILE = "$BRIDGE_DIR/bridge.token"
     const val BASH_BIN = "$PREFIX_DIR/bin/bash"
     const val HUB_PORT = 4400
@@ -71,6 +72,9 @@ object AntigravityEngine {
     private var cachedHubListening: Boolean = false
     private val HUB_URL_REGEX = Regex("https?://(?:localhost|127\\.0\\.0\\.1):4400/#t=[A-Za-z0-9._-]+")
     private val HUB_BASE_URL_REGEX = Regex("https?://(?:localhost|127\\.0\\.0\\.1):4400(?:/[^\\s\"'<>]*)?")
+    private val OAUTH_URL_REGEX = Regex("https://accounts\\.google\\.com/[^\\s\"'<>]+")
+    @Volatile
+    var externalUrlHandlerActive: Boolean = false
 
 
     fun isBootstrapReady(): Boolean = File(BASH_BIN).exists()
@@ -109,6 +113,7 @@ object AntigravityEngine {
         env["LANG"] = "en_US.UTF-8"
         env["AGY_ENABLE_HUB"] = "1"
         env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "1"
+        env["BROWSER"] = "$HOME_DIR/.local/bin/xdg-open"
         return env
     }
 
@@ -160,6 +165,24 @@ object AntigravityEngine {
             val sharedLinkExists = runCatching { Os.lstat(sharedLink.absolutePath); true }.getOrDefault(false)
             if (!sharedLinkExists) {
                 runCatching { Os.symlink("/storage/emulated/0", sharedLink.absolutePath) }
+            }
+
+            val localBinDir = File("$HOME_DIR/.local/bin")
+            if (!localBinDir.exists()) localBinDir.mkdirs()
+            val xdgOut = File(localBinDir, "xdg-open")
+            val xdgTmp = File(localBinDir, "xdg-open.tmp")
+            runCatching {
+                context.assets.open("agy_bridge/xdg-open").use { input ->
+                    FileOutputStream(xdgTmp).use { output -> input.copyTo(output) }
+                }
+                xdgTmp.setReadable(true, false)
+                xdgTmp.setExecutable(true, false)
+                runCatching { Os.chmod(xdgTmp.absolutePath, 0b111101101) } // 0755
+                if (!xdgTmp.renameTo(xdgOut)) {
+                    xdgTmp.copyTo(xdgOut, overwrite = true)
+                    xdgTmp.delete()
+                    runCatching { Os.chmod(xdgOut.absolutePath, 0b111101101) }
+                }
             }
 
             val assetFiles = listOf("start_hub.sh", "dpkg_wrap.sh")
@@ -510,49 +533,90 @@ object AntigravityEngine {
         return resolved?.replace("127.0.0.1:4400", "localhost:4400")
     }
 
-    suspend fun pollForHubUrl(timeoutMs: Long = 20000L): String? = withContext(Dispatchers.IO) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        var httpReadyWithoutTokenSince = 0L
-        while (System.currentTimeMillis() < deadline) {
-            val url = parseHubUrlFromLog()
-            val httpReady = isHubHttpReady()
-            if (url != null && httpReady) {
-                return@withContext url
-            }
-            if (httpReady) {
-                val now = System.currentTimeMillis()
-                if (httpReadyWithoutTokenSince == 0L) {
-                    httpReadyWithoutTokenSince = now
-                } else if (now - httpReadyWithoutTokenSince >= 4000L) {
-                    // Hub is actively serving HTTP on port 4400 without a #t= token (e.g., fresh unauthenticated login)
-                    return@withContext parseAnyHubUrlFromLog() ?: "http://localhost:$HUB_PORT/"
-                }
-            } else {
-                httpReadyWithoutTokenSince = 0L
-            }
-            delay(150L)
-        }
-        val fallback = parseHubUrlFromLog()
-        if (fallback != null && isHubHttpReady()) {
-            fallback
-        } else if (isHubHttpReady()) {
-            parseAnyHubUrlFromLog() ?: "http://localhost:$HUB_PORT/"
-        } else {
+    fun consumePendingOpenUrl(): String? {
+        val file = File(PENDING_OPEN_URL_FILE)
+        if (!file.isFile) return null
+        return try {
+            val raw = file.readText().trim()
+            file.delete()
+            if (raw.startsWith("http://") || raw.startsWith("https://")) raw else null
+        } catch (_: Exception) {
+            runCatching { file.delete() }
             null
         }
     }
 
-    suspend fun restartHub(context: Context): String? = withContext(Dispatchers.IO) {
+    fun parseOAuthUrlFromLog(): String? {
+        val tail = readLogTail(32768)
+        if (tail.isEmpty()) return null
+        return OAUTH_URL_REGEX.findAll(tail).lastOrNull()?.value
+    }
+
+    suspend fun pollForHubUrl(
+        timeoutMs: Long = 20000L,
+        onExternalUrl: ((String) -> Unit)? = null
+    ): String? = withContext(Dispatchers.IO) {
+        var deadline = System.currentTimeMillis() + timeoutMs
+        var httpReadyWithoutTokenSince = 0L
+        var lastOpenedOAuthUrl: String? = null
+        if (onExternalUrl != null) externalUrlHandlerActive = true
+        try {
+            while (System.currentTimeMillis() < deadline) {
+                if (onExternalUrl != null) {
+                    val pendingUrl = consumePendingOpenUrl()
+                    val oauthUrl = pendingUrl ?: parseOAuthUrlFromLog()
+                    if (oauthUrl != null && oauthUrl != lastOpenedOAuthUrl && !AntigravityFileHelper.isTrustedHubUri(oauthUrl)) {
+                        lastOpenedOAuthUrl = oauthUrl
+                        // Give user up to 3 minutes to complete Google OAuth in Chrome
+                        deadline = maxOf(deadline, System.currentTimeMillis() + 180_000L)
+                        runCatching { onExternalUrl(oauthUrl) }
+                    }
+                }
+                val url = parseHubUrlFromLog()
+                val httpReady = isHubHttpReady()
+                if (url != null && httpReady) {
+                    return@withContext url
+                }
+                if (httpReady) {
+                    val now = System.currentTimeMillis()
+                    if (httpReadyWithoutTokenSince == 0L) {
+                        httpReadyWithoutTokenSince = now
+                    } else if (now - httpReadyWithoutTokenSince >= 4000L) {
+                        return@withContext parseAnyHubUrlFromLog() ?: "http://localhost:$HUB_PORT/"
+                    }
+                } else {
+                    httpReadyWithoutTokenSince = 0L
+                }
+                delay(150L)
+            }
+            val fallback = parseHubUrlFromLog()
+            if (fallback != null && isHubHttpReady()) {
+                fallback
+            } else if (isHubHttpReady()) {
+                parseAnyHubUrlFromLog() ?: "http://localhost:$HUB_PORT/"
+            } else {
+                null
+            }
+        } finally {
+            if (onExternalUrl != null) externalUrlHandlerActive = false
+        }
+    }
+
+    suspend fun restartHub(
+        context: Context,
+        onExternalUrl: ((String) -> Unit)? = null
+    ): String? = withContext(Dispatchers.IO) {
         restartMutex.withLock {
             stopBackgroundProcessesSuspend()
             delay(450L)
             runCatching { File(HUB_URL_FILE).delete() }
+            runCatching { File(PENDING_OPEN_URL_FILE).delete() }
             File(AGY_LOG).apply {
                 parentFile?.mkdirs()
                 writeText("")
             }
             startHubAndBridge(context)
-            pollForHubUrl(25000L)
+            pollForHubUrl(25000L, onExternalUrl = onExternalUrl)
         }
     }
 
@@ -639,7 +703,7 @@ object AntigravityEngine {
             val pid = entry.name.toIntOrNull() ?: continue
             if (pid <= 1 || pid == selfPid) continue
             val cmdline = runCatching {
-                File(entry, "cmdline").readBytes().toString(Charsets.UTF_8).replace(' ', ' ')
+                File(entry, "cmdline").readBytes().toString(Charsets.UTF_8).replace('\u0000', ' ')
             }.getOrNull() ?: continue
             if ((cmdline.contains("/agy ") && cmdline.contains("--hub")) ||
                 cmdline.contains("bridge_server.py")
