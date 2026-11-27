@@ -22,7 +22,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Builds and wires the Control Center BottomSheetDialog (health status, multi-account switching,
- * power/notification toggles, CLI reinstall, GitHub update check, backup/restore).
+ * language/BiDi toggles, power/notification toggles, CLI reinstall, GitHub update check, backup/restore).
  */
 class ControlCenterSheetController(
     private val activity: AppCompatActivity,
@@ -35,6 +35,8 @@ class ControlCenterSheetController(
     interface Callbacks {
         fun onApplyKeepScreenOn(enabled: Boolean)
         fun onApplyCpuWakeLock(enabled: Boolean)
+        fun onApplyBidiRtl(enabled: Boolean)
+        fun onApplyPersianUi(enabled: Boolean)
         fun onSendTestNotification()
         fun onAddAccount()
         fun onSwitchAccount(account: AccountProfile)
@@ -104,6 +106,21 @@ class ControlCenterSheetController(
             callbacks.onAddAccount()
         }
 
+        val switchBidiRtl = view.findViewById<Switch>(R.id.switch_bidi_rtl)
+        val switchPersianUi = view.findViewById<Switch>(R.id.switch_persian_ui)
+        switchBidiRtl.isChecked = AntigravityJsBridge.isBidiRtlEnabled(activity)
+        switchPersianUi.isChecked = AntigravityJsBridge.isPersianUiEnabled(activity)
+
+        switchBidiRtl.setOnCheckedChangeListener { _, checked ->
+            AntigravityJsBridge.setBidiRtlEnabled(activity, checked)
+            callbacks.onApplyBidiRtl(checked)
+        }
+        switchPersianUi.setOnCheckedChangeListener { _, checked ->
+            AntigravityJsBridge.setPersianUiEnabled(activity, checked)
+            dialog.dismiss()
+            callbacks.onApplyPersianUi(checked)
+        }
+
         val switchScreenOn = view.findViewById<Switch>(R.id.switch_keep_screen_on)
         val switchCpuWake = view.findViewById<Switch>(R.id.switch_cpu_wakelock)
         val switchNotifyDone = view.findViewById<Switch>(R.id.switch_notify_done)
@@ -159,13 +176,15 @@ class ControlCenterSheetController(
             if (activity.isFinishing || activity.isDestroyed || sheetDismissed) return@launch
             dotEngine.setBackgroundResource(if (health.engineReady) R.drawable.agy_dot_ok else R.drawable.agy_dot_off)
             txtEngine.text = if (health.engineReady) {
-                "Embedded Engine: Active (${Build.SUPPORTED_ABIS.firstOrNull() ?: "Linux"})"
+                activity.getString(R.string.agy_status_engine_active, Build.SUPPORTED_ABIS.firstOrNull() ?: "Linux")
             } else {
-                "Embedded Engine: Initializing"
+                activity.getString(R.string.agy_status_engine_init)
             }
 
             dotHub.setBackgroundResource(if (health.hubReady) R.drawable.agy_dot_ok else R.drawable.agy_dot_off)
-            txtHub.text = if (health.hubReady) "Antigravity Hub (4400): Online" else "Antigravity Hub (4400): Offline"
+            txtHub.text = activity.getString(
+                if (health.hubReady) R.string.agy_status_hub_online else R.string.agy_status_hub_offline
+            )
 
             renderAccountsInSheet(txtActiveAccount, accountsListContainer, accounts, dialog)
         }
@@ -198,36 +217,36 @@ class ControlCenterSheetController(
         view.findViewById<View>(R.id.sheet_btn_reinstall_cli).setOnClickListener {
             dialog.dismiss()
             if (AntigravityEngine.isInstallRunning()) {
-                Toast.makeText(activity, "Installation already in progress...", Toast.LENGTH_SHORT).show()
+                Toast.makeText(activity, activity.getString(R.string.agy_toast_install_running), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             AlertDialog.Builder(activity)
-                .setTitle("Reinstall / Update CLI")
-                .setMessage("Stop Antigravity Hub and run the official Antigravity CLI installer from https://antigravity.google/cli/install.sh?")
-                .setPositiveButton("Reinstall") { _, _ ->
+                .setTitle(R.string.agy_dialog_reinstall_title)
+                .setMessage(R.string.agy_dialog_reinstall_msg)
+                .setPositiveButton(R.string.agy_dialog_reinstall_btn) { _, _ ->
                     callbacks.onReinstallCliConfirmed()
                 }
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(R.string.agy_btn_cancel, null)
                 .show()
         }
 
         view.findViewById<View>(R.id.sheet_btn_check_update).setOnClickListener {
-            Toast.makeText(activity, "Checking GitHub Releases...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(activity, activity.getString(R.string.agy_toast_checking_updates), Toast.LENGTH_SHORT).show()
             activity.lifecycleScope.launch {
                 val res = AntigravityEngine.checkLatestRelease()
                 if (activity.isFinishing || activity.isDestroyed) return@launch
                 res.onSuccess { info ->
                     val current = "v${BuildConfig.VERSION_NAME}"
                     if (info.tagName.isNotBlank() && AntigravityEngine.isNewerVersion(info.tagName, current)) {
-                        val msg = if (info.isLiteApk) {
-                            "Installed: $current\nLatest: ${info.tagName}\n\nDownload and install the lightweight universal-lite update?"
-                        } else {
-                            "Installed: $current\nLatest: ${info.tagName}\n\nDownload and install the updated APK from GitHub Releases?"
-                        }
+                        val msg = activity.getString(
+                            if (info.isLiteApk) R.string.agy_dialog_update_msg_lite else R.string.agy_dialog_update_msg_full,
+                            current,
+                            info.tagName
+                        )
                         AlertDialog.Builder(activity)
-                            .setTitle("Update Available (${info.tagName})")
+                            .setTitle(activity.getString(R.string.agy_dialog_update_title, info.tagName))
                             .setMessage(msg)
-                            .setPositiveButton("Download & Install") { _, _ ->
+                            .setPositiveButton(R.string.agy_dialog_update_btn) { _, _ ->
                                 dialog.dismiss()
                                 if (info.downloadApkUrl != null) {
                                     callbacks.onStartInAppUpdate(info)
@@ -235,13 +254,17 @@ class ControlCenterSheetController(
                                     runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.releaseUrl))) }
                                 }
                             }
-                            .setNegativeButton("Later", null)
+                            .setNegativeButton(R.string.agy_btn_later, null)
                             .show()
                     } else {
-                        Toast.makeText(activity, "You're up to date ($current)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(activity, activity.getString(R.string.agy_toast_up_to_date, current), Toast.LENGTH_SHORT).show()
                     }
                 }.onFailure { err ->
-                    Toast.makeText(activity, "Update check failed: ${err.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        activity,
+                        activity.getString(R.string.agy_toast_update_check_failed, err.message ?: ""),
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
         }
@@ -249,13 +272,13 @@ class ControlCenterSheetController(
         view.findViewById<View>(R.id.sheet_btn_phantom_fix).setOnClickListener {
             val cmd = "adb shell \"/system/bin/device_config put activity_manager max_phantom_processes 2147483647\""
             AlertDialog.Builder(activity)
-                .setTitle("Android 12+ Phantom Process Fix")
-                .setMessage("If Android kills heavy builds (npm/cargo/gradle) after >32 child processes, run this once via ADB or Shizuku:\n\n$cmd")
-                .setPositiveButton("Copy Command") { _, _ ->
+                .setTitle(R.string.agy_dialog_phantom_title)
+                .setMessage(activity.getString(R.string.agy_dialog_phantom_msg, cmd))
+                .setPositiveButton(R.string.agy_dialog_phantom_btn) { _, _ ->
                     callbacks.onCopyText("Phantom Process Fix", cmd)
-                    Toast.makeText(activity, "Copied ADB command to clipboard", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(activity, activity.getString(R.string.agy_toast_phantom_copied), Toast.LENGTH_SHORT).show()
                 }
-                .setNegativeButton("Close", null)
+                .setNegativeButton(R.string.agy_btn_close, null)
                 .show()
         }
 
@@ -282,11 +305,15 @@ class ControlCenterSheetController(
     ) {
         container.removeAllViews()
         val active = accounts.firstOrNull { it.isActive }
-        txtActiveAccount.text = if (active != null) "Active: ${active.email}" else "No active account signed in"
+        txtActiveAccount.text = if (active != null) {
+            activity.getString(R.string.agy_active_account_email, active.email)
+        } else {
+            activity.getString(R.string.agy_active_account_none)
+        }
 
         if (accounts.isEmpty()) {
             val emptyTv = TextView(activity).apply {
-                text = "Sign in to Antigravity, then tap '+ Add Account' to save multiple accounts for 1-tap switching."
+                text = activity.getString(R.string.agy_accounts_empty)
                 setTextColor(activity.getColor(R.color.agy_text_secondary))
                 textSize = 12f
             }
@@ -312,8 +339,8 @@ class ControlCenterSheetController(
 
             val label = TextView(activity).apply {
                 val statusSuffix = when {
-                    acct.isActive -> "  • Active"
-                    acct.isInCooldown(now) -> "  • Cooldown"
+                    acct.isActive -> activity.getString(R.string.agy_account_suffix_active)
+                    acct.isInCooldown(now) -> activity.getString(R.string.agy_account_suffix_cooldown)
                     else -> ""
                 }
                 text = "${acct.email}$statusSuffix"
@@ -328,7 +355,7 @@ class ControlCenterSheetController(
 
             if (!acct.isActive) {
                 val btnSwitch = TextView(activity).apply {
-                    text = "Switch"
+                    text = activity.getString(R.string.agy_btn_switch)
                     setTextColor(0xFFFFFFFF.toInt())
                     setBackgroundResource(R.drawable.agy_btn_primary)
                     textSize = 11.5f
@@ -352,7 +379,11 @@ class ControlCenterSheetController(
                             if (removed && !activity.isFinishing && !activity.isDestroyed) {
                                 val updated = withContext(Dispatchers.IO) { accountManager.listAccounts() }
                                 renderAccountsInSheet(txtActiveAccount, container, updated, dialog)
-                                Toast.makeText(activity, "Removed ${acct.email}", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    activity,
+                                    activity.getString(R.string.agy_toast_account_removed, acct.email),
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         }
                     }

@@ -1,0 +1,252 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!DOCTYPE resources [
+    <!ENTITY TERMUX_PACKAGE_NAME "com.agy.os">
+    <!ENTITY TERMUX_APP_NAME "آنتی‌گرویتی">
+    <!ENTITY TERMUX_API_APP_NAME "Termux:API">
+    <!ENTITY TERMUX_BOOT_APP_NAME "Termux:Boot">
+    <!ENTITY TERMUX_FLOAT_APP_NAME "Termux:Float">
+    <!ENTITY TERMUX_STYLING_APP_NAME "Termux:Styling">
+    <!ENTITY TERMUX_TASKER_APP_NAME "Termux:Tasker">
+    <!ENTITY TERMUX_WIDGET_APP_NAME "Termux:Widget">
+    ]>
+
+<resources>
+    <string name="application_name">Antigravity</string>
+    <string name="antigravity_app_name">آنتی‌گرویتی</string>
+    <string name="shared_user_label">کاربر &TERMUX_APP_NAME;</string>
+
+    <!-- Bootstrap -->
+    <string name="bootstrap_installer_body">در حال نصب بسته‌های پایه…</string>
+    <string name="bootstrap_error_title">خطا در نصب بسته‌های پایه</string>
+    <string name="bootstrap_error_body">&TERMUX_APP_NAME; نتوانست بسته‌های پایه را نصب کند.</string>
+    <string name="bootstrap_error_abort">لغو</string>
+    <string name="bootstrap_error_try_again">تلاش مجدد</string>
+
+    <!-- Terminal Sidebar and Popup -->
+    <string name="action_new_session">نشست جدید</string>
+    <string name="action_new_session_failsafe">حالت ایمن</string>
+    <string name="title_max_terminals_reached">سقف ترمینال‌ها پر شد</string>
+    <string name="msg_max_terminals_reached">پیش از ساخت نشست جدید، یکی از نشست‌های فعلی را ببندید.</string>
+    <string name="title_rename_session">نام‌گذاری نشست</string>
+    <string name="action_rename_session_confirm">تنظیم</string>
+    <string name="title_create_named_session">نشست نام‌دار جدید</string>
+    <string name="action_create_named_session_confirm">ایجاد</string>
+    <string name="action_toggle_soft_keyboard">صفحه‌کلید</string>
+    <string name="msg_enabling_terminal_toolbar">نوار ابزار ترمینال فعال شد</string>
+    <string name="msg_disabling_terminal_toolbar">نوار ابزار ترمینال غیرفعال شد</string>
+    <string name="action_select_url">انتخاب پیوند</string>
+    <string name="title_select_url_dialog">برای کپی ضربه بزنید یا برای باز کردن نگه دارید</string>
+    <string name="title_select_url_none_found">پیوندی در ترمینال یافت نشد.</string>
+    <string name="msg_select_url_copied_to_clipboard">پیوند در کلیپ‌بورد کپی شد</string>
+    <string name="action_share_transcript">اشتراک‌گذاری متن</string>
+    <string name="action_share_selected_text">اشتراک‌گذاری متن انتخاب‌شده</string>
+    <string name="action_reset_terminal">بازنشانی</string>
+    <string name="msg_terminal_reset">ترمینال بازنشانی شد</string>
+    <string name="action_kill_process">بستن پردازش (%d)</string>
+    <string name="title_confirm_kill_process">آیا این نشست بسته شود؟</string>
+    <string name="action_style_terminal">سبک</string>
+    <string name="action_toggle_keep_screen_on">روشن ماندن صفحه</string>
+    <string name="action_open_help">راهنما</string>
+    <string name="action_open_settings">تنظیمات</string>
+    <string name="action_report_issue">گزارش مشکل</string>
+
+    <!-- Notifications -->
+    <string name="notification_action_exit">خروج</string>
+    <string name="notification_action_wake_lock">قفل بیداری</string>
+    <string name="notification_action_wake_unlock">آزادسازی قفل بیداری</string>
+
+    <!-- Control Center -->
+    <string name="agy_control_center_title">مرکز کنترل آنتی‌گرویتی</string>
+    <string name="agy_status_engine_checking">موتور داخلی: در حال بررسی…</string>
+    <string name="agy_status_engine_active">موتور داخلی: فعال (%1$s)</string>
+    <string name="agy_status_engine_init">موتور داخلی: در حال آماده‌سازی</string>
+    <string name="agy_status_hub_checking">هاب آنتی‌گرویتی (۴۴۰۰): در حال بررسی…</string>
+    <string name="agy_status_hub_online">هاب آنتی‌گرویتی (۴۴۰۰): آنلاین</string>
+    <string name="agy_status_hub_offline">هاب آنتی‌گرویتی (۴۴۰۰): آفلاین</string>
+    <string name="agy_status_data_saver">صرفه‌جویی داده: AGY_CLI_DISABLE_AUTO_UPDATE=1</string>
+
+    <string name="agy_section_accounts">حساب‌ها و جابه‌جایی خودکار سهمیه</string>
+    <string name="agy_active_account_checking">فعال: در حال بررسی…</string>
+    <string name="agy_active_account_email">فعال: %1$s</string>
+    <string name="agy_active_account_none">هیچ حساب فعالی وارد نشده است</string>
+    <string name="agy_accounts_empty">وارد آنتی‌گرویتی شوید و سپس «+ افزودن حساب» را بزنید تا چند حساب را برای جابه‌جایی تک‌ضرب ذخیره کنید.</string>
+    <string name="agy_account_suffix_active">\u0020\u0020• فعال</string>
+    <string name="agy_account_suffix_cooldown">\u0020\u0020• انتظار سهمیه</string>
+    <string name="agy_btn_switch">جابه‌جایی</string>
+    <string name="agy_btn_add_account">+ افزودن حساب</string>
+    <string name="agy_switch_auto_quota">جابه‌جایی خودکار حساب هنگام اتمام سهمیه</string>
+    <string name="agy_switch_region_bypass">دور زدن محدودیت منطقه‌ای (آزمایشی)</string>
+    <string name="agy_toast_account_removed">حساب %1$s حذف شد</string>
+
+    <string name="agy_section_language_bidi">زبان و جهت متن / فارسی</string>
+    <string name="agy_switch_smart_bidi">هوشمند راست‌به‌چپ (Smart BiDi / RTL)</string>
+    <string name="agy_switch_persian_ui">رابط کاربری فارسی (Persian UI)</string>
+
+    <string name="agy_section_quick_actions">اقدامات سریع</string>
+    <string name="agy_btn_reload_ui">بارگذاری مجدد</string>
+    <string name="agy_btn_restart_hub">راه‌اندازی مجدد هاب</string>
+    <string name="agy_btn_builtin_terminal">ترمینال داخلی</string>
+    <string name="agy_btn_view_logs">مشاهده لاگ‌ها</string>
+    <string name="agy_btn_clear_cache">پاک‌سازی کش</string>
+    <string name="agy_btn_check_updates">بررسی آپدیت</string>
+    <string name="agy_btn_reinstall_cli">نصب مجدد / آپدیت CLI آنتی‌گرویتی</string>
+
+    <string name="agy_section_power_alerts">انرژی و هشدارهای ایجنت</string>
+    <string name="agy_switch_keep_screen_on">روشن نگه داشتن صفحه هنگام باز بودن برنامه</string>
+    <string name="agy_switch_cpu_wakelock">نگه داشتن قفل پردازنده در پس‌زمینه</string>
+    <string name="agy_switch_notify_done">اعلان هنگام پایان کار ایجنت</string>
+    <string name="agy_switch_notify_foreground">نمایش اعلان حتی هنگام باز بودن برنامه</string>
+    <string name="agy_btn_test_alert">تست اعلان</string>
+    <string name="agy_btn_android12_fix">رفع محدودیت اندروید ۱۲+</string>
+
+    <string name="agy_section_backup">پشتیبان‌گیری و بازیابی آفلاین (.tar.zst)</string>
+    <string name="agy_btn_backup_full">بکاپ کامل</string>
+    <string name="agy_btn_backup_packages">فقط بسته‌ها</string>
+    <string name="agy_btn_restore_backup">بازیابی بکاپ (.tar.zst)</string>
+
+    <!-- Main / Splash / Setup / Onboarding -->
+    <string name="agy_reconnect_banner_default">در حال اتصال مجدد به هاب آنتی‌گرویتی…</string>
+    <string name="agy_reconnect_banner_unavailable">هاب آنتی‌گرویتی در دسترس نیست. در حال اتصال مجدد…</string>
+    <string name="agy_reconnect_banner_render_restart">پردازش رندر مجدداً راه‌اندازی شد. در حال بارگذاری…</string>
+    <string name="agy_reconnect_banner_restarting">در حال راه‌اندازی مجدد هاب آنتی‌گرویتی…</string>
+    <string name="agy_reconnect_banner_offline">هاب آفلاین است — برای راه‌اندازی مجدد مرکز کنترل را باز کنید</string>
+    <string name="agy_terminal_title">ترمینال داخلی</string>
+    <string name="agy_btn_back">بازگشت</string>
+    <string name="agy_splash_preparing_engine">در حال آماده‌سازی موتور لینوکس داخلی…</string>
+    <string name="agy_splash_starting_engine">در حال راه‌اندازی موتور لینوکس داخلی…</string>
+    <string name="agy_splash_starting_hub">در حال راه‌اندازی هاب آنتی‌گرویتی…</string>
+    <string name="agy_splash_lite_error">این بسته نسخه آپدیت سبک است.\nابتدا فایل کامل AntigravityStandalone.apk را نصب کنید و سپس این آپدیت را اعمال نمایید.</string>
+    <string name="agy_splash_render_crash">موتور نمایش WebView مکرراً متوقف شد.\nلاگ‌ها را بررسی کنید، دوباره تلاش کنید یا ترمینال را باز نمایید.</string>
+    <string name="agy_splash_hub_timeout">هاب آنتی‌گرویتی در زمان مقرر راه‌اندازی نشد.\nلاگ‌ها را بررسی کنید، دوباره تلاش کنید یا ترمینال را باز نمایید.</string>
+    <string name="agy_btn_retry_hub">تلاش مجدد</string>
+    <string name="agy_btn_terminal_short">ترمینال</string>
+    <string name="agy_btn_logs_short">لاگ‌ها</string>
+
+    <string name="agy_setup_title">تنظیم دسترسی‌های دستگاه</string>
+    <string name="agy_setup_subtitle">دسترسی حافظه و اجرای پس‌زمینه را تایید کنید تا آنتی‌گرویتی بتواند به فایل‌های گوشی دسترسی داشته باشد، بکاپ‌های آفلاین را بازیابی کند و در پس‌زمینه فعال بماند.</string>
+    <string name="agy_btn_grant_storage">اعطای دسترسی کامل به فایل‌ها</string>
+    <string name="agy_btn_grant_storage_ok">دسترسی کامل به فایل‌ها تایید شد</string>
+    <string name="agy_btn_grant_battery">غیرفعال‌سازی بهینه‌سازی باتری</string>
+    <string name="agy_btn_grant_battery_ok">بهینه‌سازی باتری غیرفعال شد</string>
+    <string name="agy_btn_skip">رد کردن</string>
+    <string name="agy_btn_continue">ادامه</string>
+
+    <string name="agy_onboarding_title">محیط آنتی‌گرویتی آماده است</string>
+    <string name="agy_onboarding_subtitle">پوسته لینوکس داخلی فعال است، اما CLI آنتی‌گرویتی (~/.local/bin/agy) هنوز نصب نشده است.</string>
+    <string name="agy_onboarding_auto_install">نصب خودکار آنتی‌گرویتی</string>
+    <string name="agy_onboarding_import">وارد کردن بکاپ / انتقال از Termux (.tar.zst)</string>
+    <string name="agy_onboarding_open_terminal">باز کردن ترمینال داخلی</string>
+    <string name="agy_onboarding_port_title">قصد انتقال بسته‌ها از Termux اصلی را دارید؟</string>
+    <string name="agy_onboarding_port_desc">پیش از حذف Termux اصلی، دستور خروجی را در آن اجرا کنید و سپس دکمه «وارد کردن بکاپ» در بالا را بزنید تا تمام بسته‌ها به‌صورت آفلاین منتقل شوند.</string>
+    <string name="agy_btn_copy_port_cmd">کپی دستور انتقال Termux</string>
+    <string name="agy_detected_master_backup">بکاپ اصلی شناسایی شد: %1$s (%2$.1f مگابایت)</string>
+    <string name="agy_detected_backup">بکاپ شناسایی شد: %1$s (%2$.1f مگابایت)</string>
+
+    <!-- Dialogs & Toasts -->
+    <string name="agy_btn_cancel">لغو</string>
+    <string name="agy_btn_close">بستن</string>
+    <string name="agy_btn_copy">کپی</string>
+    <string name="agy_btn_ok">تایید</string>
+    <string name="agy_btn_dismiss">بستن</string>
+    <string name="agy_btn_later">بعداً</string>
+
+    <string name="agy_dialog_reinstall_title">نصب مجدد / آپدیت CLI</string>
+    <string name="agy_dialog_reinstall_msg">هاب آنتی‌گرویتی متوقف شود و نصب‌کننده رسمی CLI از https://antigravity.google/cli/install.sh اجرا شود؟</string>
+    <string name="agy_dialog_reinstall_btn">نصب مجدد</string>
+
+    <string name="agy_toast_checking_updates">در حال بررسی نسخه‌های GitHub…</string>
+    <string name="agy_dialog_update_title">نسخه جدید در دسترس است (%1$s)</string>
+    <string name="agy_dialog_update_msg_lite">نسخه فعلی: %1$s\nجدیدترین نسخه: %2$s\n\nنسخه سبک آپدیت دانلود و نصب شود؟</string>
+    <string name="agy_dialog_update_msg_full">نسخه فعلی: %1$s\nجدیدترین نسخه: %2$s\n\nفایل APK جدید از GitHub Releases دانلود و نصب شود؟</string>
+    <string name="agy_dialog_update_btn">دانلود و نصب</string>
+    <string name="agy_toast_up_to_date">برنامه به‌روز است (%1$s)</string>
+    <string name="agy_toast_update_check_failed">بررسی آپدیت ناموفق بود: %1$s</string>
+    <string name="agy_dialog_updating_title">در حال آپدیت به %1$s</string>
+    <string name="agy_updating_preparing">در حال آماده‌سازی دانلود آپدیت…</string>
+    <string name="agy_toast_update_failed">آپدیت ناموفق بود: %1$s</string>
+    <string name="agy_dialog_install_perm_title">اجازه نصب برنامه</string>
+    <string name="agy_dialog_install_perm_msg">به آنتی‌گرویتی اجازه دهید آپدیت‌ها را از این منبع نصب کند، سپس برای ادامه نصب بازگردید.</string>
+    <string name="agy_dialog_install_perm_btn">باز کردن تنظیمات</string>
+    <string name="agy_toast_unable_open_install_settings">باز کردن تنظیمات نصب ممکن نشد</string>
+    <string name="agy_toast_unable_launch_installer">اجرای نصب‌کننده ممکن نشد: %1$s</string>
+
+    <string name="agy_dialog_phantom_title">رفع محدودیت پردازش‌های پس‌زمینه اندروید ۱۲+</string>
+    <string name="agy_dialog_phantom_msg">اگر اندروید بیلدهای سنگین (npm/cargo/gradle) را پس از بیش از ۳۲ پردازش فرزند می‌بندد، این دستور را یک‌بار با ADB یا Shizuku اجرا کنید:\n\n%1$s</string>
+    <string name="agy_dialog_phantom_btn">کپی دستور</string>
+    <string name="agy_toast_phantom_copied">دستور ADB در کلیپ‌بورد کپی شد</string>
+
+    <string name="agy_dialog_logs_title">لاگ‌های هاب آنتی‌گرویتی</string>
+    <string name="agy_toast_logs_copied">لاگ‌ها در کلیپ‌بورد کپی شدند</string>
+
+    <string name="agy_dialog_region_bypass_title">دور زدن آزمایشی محدودیت منطقه</string>
+    <string name="agy_dialog_region_bypass_msg">این گزینه آزمایشی فایل‌های اجرایی محلی CLI آنتی‌گرویتی را روی دستگاه برای عبور از بررسی منطقه حساب پچ می‌کند. ممکن است پس از آپدیت CLI از کار بیفتد و استفاده از آن با مسئولیت خودتان در قبال قوانین سرویس گوگل است.\n\nفعال و هاب مجدداً راه‌اندازی شود؟</string>
+    <string name="agy_dialog_region_bypass_btn">متوجه شدم، فعال شود</string>
+    <string name="agy_banner_region_applying">در حال اعمال دور زدن محدودیت منطقه و راه‌اندازی مجدد هاب…</string>
+    <string name="agy_banner_region_reverting">در حال بازگردانی محدودیت منطقه و راه‌اندازی مجدد هاب…</string>
+    <string name="agy_toast_region_enabled">دور زدن محدودیت منطقه‌ای فعال شد</string>
+    <string name="agy_toast_region_saved">تنظیم ذخیره شد (فایل قبلاً پچ شده یا یافت نشد)</string>
+    <string name="agy_toast_region_disabled">دور زدن محدودیت منطقه‌ای غیرفعال شد</string>
+
+    <string name="agy_dialog_region_unsupported_title">منطقه حساب پشتیبانی نمی‌شود</string>
+    <string name="agy_dialog_region_unsupported_offer_msg">گوگل گزارش داد که منطقه این حساب برای آنتی‌گرویتی مجاز نیست.\n\nدور زدن آزمایشی محدودیت منطقه فعال شود؟ هر زمان از مرکز کنترل می‌توانید آن را خاموش کنید.</string>
+    <string name="agy_dialog_region_enable_restart_btn">فعال‌سازی و راه‌اندازی مجدد هاب</string>
+    <string name="agy_dialog_region_ip_title">موقعیت مکانی توسط گوگل مسدود شد</string>
+    <string name="agy_dialog_region_ip_msg">گوگل این درخواست را به‌دلیل پشتیبانی‌نشدن IP یا موقعیت فعلی شما مسدود کرد.\n\nدور زدن محدودیت حساب نمی‌تواند مسدودیت IP را تغییر دهد — به یک منطقه پشتیبانی‌شده متصل شوید و صفحه را بارگذاری مجدد کنید.</string>
+    <string name="agy_dialog_region_unsupported_msg">گوگل گزارش داد که منطقه این حساب برای آنتی‌گرویتی مجاز نیست.\n\nبا یک حساب مجاز وارد شوید یا از منطقه پشتیبانی‌شده استفاده کنید.</string>
+
+    <string name="agy_toast_mic_denied">دسترسی میکروفون رد شد</string>
+    <string name="agy_toast_shared_text_copied">متن اشتراک‌گذاری‌شده کپی شد — در آنتی‌گرویتی جای‌گذاری کنید</string>
+    <string name="agy_toast_shared_one_saved">در %1$s ذخیره شد (مسیر کپی شد)</string>
+    <string name="agy_toast_shared_multi_saved">%1$d فایل در inbox ذخیره شد (مسیرها کپی شدند)</string>
+    <string name="agy_toast_shared_failed">وارد کردن فایل اشتراک‌گذاری‌شده ممکن نشد</string>
+    <string name="agy_toast_saved_to">در %1$s ذخیره شد</string>
+    <string name="agy_toast_download_failed">دانلود ناموفق بود: %1$s</string>
+    <string name="agy_toast_blob_too_large">حجم فایل دانلودی از سقف ۲۵ مگابایت بیشتر است</string>
+    <string name="agy_toast_downloading_file">در حال دانلود %1$s…</string>
+    <string name="agy_toast_test_notif_sent">اعلان آزمایشی ارسال شد</string>
+    <string name="agy_toast_hub_restart_failed">راه‌اندازی مجدد هاب ناموفق بود</string>
+    <string name="agy_toast_hub_restart_logs">راه‌اندازی مجدد هاب ناموفق بود — لاگ‌های هاب را بررسی کنید</string>
+    <string name="agy_toast_cache_cleared">کش WebView پاک شد — در حال بارگذاری مجدد…</string>
+    <string name="agy_toast_install_running">نصب هم‌اکنون در حال انجام است…</string>
+    <string name="agy_install_starting">در حال شروع نصب خودکار CLI آنتی‌گرویتی…</string>
+    <string name="agy_toast_installed_booting">نصب شد! در حال راه‌اندازی آنتی‌گرویتی…</string>
+    <string name="agy_install_failed_status">نصب ناموفق بود: %1$s</string>
+    <string name="agy_toast_auto_install_failed">نصب خودکار ناموفق بود: %1$s</string>
+    <string name="agy_toast_port_cmd_copied">دستور انتقال Termux در کلیپ‌بورد کپی شد</string>
+    <string name="agy_toast_hub_timeout">زمان راه‌اندازی هاب به پایان رسید — مرکز کنترل یا ترمینال داخلی را بررسی کنید</string>
+    <string name="agy_banner_oauth_browser">ورود با گوگل را در مرورگر تکمیل کنید…</string>
+    <string name="agy_banner_oauth_cancel">ورود با گوگل را در مرورگر تکمیل کنید (برای لغو ضربه بزنید)</string>
+    <string name="agy_banner_preparing_signin">در حال آماده‌سازی ورود با گوگل… (برای لغو ضربه بزنید)</string>
+    <string name="agy_toast_signin_next">با حساب گوگل بعدی خود وارد شوید</string>
+    <string name="agy_toast_signin_hub_failed">راه‌اندازی مجدد هاب برای ورود ناموفق بود — لاگ‌های هاب را در مرکز کنترل بررسی کنید</string>
+    <string name="agy_toast_signin_cancelled">ورود به حساب لغو شد</string>
+    <string name="agy_toast_cred_load_failed">بارگذاری اطلاعات ورود برای %1$s ناموفق بود</string>
+    <string name="agy_toast_switched_account">حساب به %1$s تغییر یافت</string>
+    <string name="agy_toast_auto_switched">سهمیه تمام شد — جابه‌جایی خودکار به %1$s</string>
+    <string name="agy_toast_switched_hub_failed">حساب جابه‌جا شد، اما راه‌اندازی مجدد هاب ناموفق بود</string>
+    <string name="agy_banner_switching_account">در حال تغییر به %1$s…</string>
+    <string name="agy_banner_switching_quota">سهمیه تمام شد — در حال تغییر به %1$s…</string>
+    <string name="agy_toast_quota_no_other">سهمیه تمام شد — حساب دیگری برای جابه‌جایی در دسترس نیست</string>
+    <string name="agy_backup_starting">در حال شروع %1$s…</string>
+    <string name="agy_toast_backup_saved">%1$s ذخیره شد (%2$.1f مگابایت) — توکن‌های ورود برای امنیت مستثنی شدند</string>
+    <string name="agy_backup_error">خطا: %1$s</string>
+    <string name="agy_toast_backup_failed">بکاپ ناموفق بود: %1$s</string>
+    <string name="agy_restore_browse_picker">انتخاب فایل از دستگاه…</string>
+    <string name="agy_dialog_restore_title">انتخاب بکاپ آفلاین (.tar.zst)</string>
+    <string name="agy_restore_preparing">در حال آماده‌سازی بازیابی…</string>
+    <string name="agy_restore_reading">در حال خواندن %1$s…</string>
+    <string name="agy_toast_restore_complete">بازیابی کامل شد! در حال اجرای آنتی‌گرویتی…</string>
+    <string name="agy_restore_failed">بازیابی ناموفق بود: %1$s</string>
+    <string name="agy_toast_press_back_again">برای خروج از آنتی‌گرویتی دوباره بازگشت را بزنید</string>
+
+    <!-- Notifications -->
+    <string name="agy_notif_channel_name">هشدارهای ایجنت آنتی‌گرویتی</string>
+    <string name="agy_notif_channel_desc">اعلان هنگام اتمام کار ایجنت آنتی‌گرویتی</string>
+    <string name="agy_notif_default_body">وظیفه ایجنت به پایان رسید</string>
+    <string name="agy_notif_agent_finished_summary">ایجنت کار خود را به پایان رساند</string>
+    <string name="agy_notif_test_body">وظیفه ایجنت به پایان رسید — آماده بررسی است.</string>
+    <string name="agy_notif_auto_switched_title">جابه‌جایی خودکار حساب</string>
+    <string name="agy_notif_signin_title">ورود به آنتی‌گرویتی</string>
+    <string name="agy_notif_signin_body">برای باز کردن مرورگر و تکمیل احراز هویت ضربه بزنید</string>
+</resources>

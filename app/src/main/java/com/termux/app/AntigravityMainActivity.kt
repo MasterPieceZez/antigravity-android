@@ -36,6 +36,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
@@ -50,9 +51,12 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.ContextCompat
+import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONObject
@@ -67,7 +71,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.resume
 import java.io.File
 import java.util.Locale
 import kotlin.coroutines.resume
@@ -192,7 +195,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 runCatching { req.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) }
             } else {
                 runCatching { req.deny() }
-                Toast.makeText(this, "Microphone permission denied", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.agy_toast_mic_denied), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -212,11 +215,23 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         ) {
             pendingUpdateApkFile = null
             runCatching { startActivity(InAppUpdater.buildInstallIntent(this, apk)) }
-                .onFailure { Toast.makeText(this, "Unable to launch installer: ${it.message}", Toast.LENGTH_LONG).show() }
+                .onFailure {
+                    Toast.makeText(
+                        this,
+                        getString(R.string.agy_toast_unable_launch_installer, it.message ?: ""),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        if (AntigravityJsBridge.isPersianUiEnabled(this)) {
+            val faLocales = LocaleListCompat.forLanguageTags("fa")
+            if (AppCompatDelegate.getApplicationLocales() != faLocales) {
+                AppCompatDelegate.setApplicationLocales(faLocales)
+            }
+        }
         super.onCreate(savedInstanceState)
         AntigravityEngine.initPaths(this)
         lifecycleScope.launch(Dispatchers.IO) { InAppUpdater.cleanupCachedUpdates(this@AntigravityMainActivity) }
@@ -236,6 +251,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         setupControllers()
         setupWebView()
         setupButtons()
+        if (hubViewModel.currentState.bootstrapComplete) {
+            restoreUiFromViewModelState()
+        }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 handleBackNavigation()
@@ -299,7 +317,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             if (type.startsWith("text/") || !sharedText.isNullOrEmpty()) {
                 if (!sharedText.isNullOrEmpty()) {
                     copyToClipboard("Antigravity Share", sharedText)
-                    Toast.makeText(this, "Shared text copied — paste into Antigravity", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, getString(R.string.agy_toast_shared_text_copied), Toast.LENGTH_LONG).show()
                 }
             }
             return
@@ -313,13 +331,13 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 val joined = savedPaths.joinToString("\n")
                 copyToClipboard("Antigravity File", joined)
                 val msg = if (savedPaths.size == 1) {
-                    "Saved to ${savedPaths.first()} (path copied)"
+                    getString(R.string.agy_toast_shared_one_saved, savedPaths.first())
                 } else {
-                    "Saved ${savedPaths.size} files to inbox (paths copied)"
+                    getString(R.string.agy_toast_shared_multi_saved, savedPaths.size)
                 }
                 Toast.makeText(this@AntigravityMainActivity, msg, Toast.LENGTH_LONG).show()
             } else {
-                Toast.makeText(this@AntigravityMainActivity, "Could not import shared file", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@AntigravityMainActivity, getString(R.string.agy_toast_shared_failed), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -359,6 +377,59 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
     private fun injectAgentNotificationBridge() {
         webView.evaluateJavascript(AntigravityJsBridge.AGENT_BRIDGE_JS, null)
+    }
+
+    private fun injectPersianBidiBridge(targetUrl: String? = webView.url) {
+        if (!AntigravityFileHelper.isTrustedHubUri(targetUrl)) return
+        val enableBidi = AntigravityJsBridge.isBidiRtlEnabled(this)
+        val enablePersianUi = AntigravityJsBridge.isPersianUiEnabled(this)
+        webView.evaluateJavascript(
+            AntigravityJsBridge.buildPersianBidiJs(enableBidi, enablePersianUi),
+            null
+        )
+    }
+
+    private fun restoreUiFromViewModelState() {
+        val state = hubViewModel.currentState
+        when (val phase = state.phase) {
+            is HubPhase.SetupPermissions -> checkPermissionsOrProceed()
+            is HubPhase.Onboarding -> showOnboardingScreen()
+            is HubPhase.Running -> {
+                splashContainer.visibility = View.GONE
+                splashActions.visibility = View.GONE
+                webView.visibility = View.VISIBLE
+                if (!pendingTerminalRestore) {
+                    floatingPill.visibility = View.VISIBLE
+                    pillController.restorePositionIfNeeded()
+                }
+                webView.loadUrl(phase.hubUrl)
+                if (pendingTerminalRestore) {
+                    pendingTerminalRestore = false
+                    showTerminalView()
+                }
+            }
+            is HubPhase.Error -> {
+                splashContainer.visibility = View.VISIBLE
+                splashActions.visibility = View.VISIBLE
+                splashStatus.text = getString(R.string.agy_splash_hub_timeout)
+                floatingPill.visibility = View.VISIBLE
+                pillController.restorePositionIfNeeded()
+            }
+            is HubPhase.Booting -> {
+                splashContainer.visibility = View.VISIBLE
+                splashStatus.text = getString(R.string.agy_splash_starting_hub)
+            }
+            is HubPhase.Initializing -> {
+                val url = state.currentHubUrl
+                if (url != null) {
+                    splashContainer.visibility = View.GONE
+                    webView.visibility = View.VISIBLE
+                    floatingPill.visibility = View.VISIBLE
+                    pillController.restorePositionIfNeeded()
+                    webView.loadUrl(url)
+                }
+            }
+        }
     }
 
     private fun bindViews() {
@@ -429,15 +500,18 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     when (json.optString("action")) {
                         "notify" -> withContext(Dispatchers.Main) {
                             showAgentDoneNotification(
-                                title = json.optString("title", "Antigravity").ifBlank { "Antigravity" },
-                                body = json.optString("body", "Agent task finished").ifBlank { "Agent task finished" },
+                                title = json.optString("title", getString(R.string.antigravity_app_name))
+                                    .ifBlank { getString(R.string.antigravity_app_name) },
+                                body = json.optString("body", getString(R.string.agy_notif_default_body))
+                                    .ifBlank { getString(R.string.agy_notif_default_body) },
                                 force = false
                             )
                         }
                         "agent_done" -> withContext(Dispatchers.Main) {
                             showAgentDoneNotification(
-                                title = "Antigravity",
-                                body = json.optString("summary", "Agent finished its task").ifBlank { "Agent finished its task" },
+                                title = getString(R.string.antigravity_app_name),
+                                body = json.optString("summary", getString(R.string.agy_notif_agent_finished_summary))
+                                    .ifBlank { getString(R.string.agy_notif_agent_finished_summary) },
                                 force = false
                             )
                         }
@@ -450,15 +524,27 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                                 }
                                 withContext(Dispatchers.Main) {
                                     res.onSuccess { displayPath ->
-                                        Toast.makeText(this@AntigravityMainActivity, "Saved to $displayPath", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(
+                                            this@AntigravityMainActivity,
+                                            getString(R.string.agy_toast_saved_to, displayPath),
+                                            Toast.LENGTH_LONG
+                                        ).show()
                                     }.onFailure { err ->
-                                        Toast.makeText(this@AntigravityMainActivity, "Download failed: ${err.message}", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(
+                                            this@AntigravityMainActivity,
+                                            getString(R.string.agy_toast_download_failed, err.message ?: ""),
+                                            Toast.LENGTH_LONG
+                                        ).show()
                                     }
                                 }
                             }
                         }
                         "download_too_large" -> withContext(Dispatchers.Main) {
-                            Toast.makeText(this@AntigravityMainActivity, "Blob download exceeds 25 MB limit", Toast.LENGTH_LONG).show()
+                            Toast.makeText(
+                                this@AntigravityMainActivity,
+                                getString(R.string.agy_toast_blob_too_large),
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
                         "quota_exhausted" -> {
                             val reason = json.optString("reason", "quota_exhausted")
@@ -523,8 +609,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     }.also { conn?.disconnect() }
                     withContext(Dispatchers.Main) {
                         val toastMsg = saveResult.fold(
-                            onSuccess = { loc -> "Saved to $loc" },
-                            onFailure = { err -> "Download failed: ${err.message}" }
+                            onSuccess = { loc -> getString(R.string.agy_toast_saved_to, loc) },
+                            onFailure = { err -> getString(R.string.agy_toast_download_failed, err.message ?: "") }
                         )
                         Toast.makeText(this@AntigravityMainActivity, toastMsg, Toast.LENGTH_LONG).show()
                     }
@@ -541,14 +627,45 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     if (!userAgent.isNullOrBlank()) req.addRequestHeader("User-Agent", userAgent)
                     val dm = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
                     dm?.enqueue(req)
-                    Toast.makeText(this@AntigravityMainActivity, "Downloading $guessedName...", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        this@AntigravityMainActivity,
+                        getString(R.string.agy_toast_downloading_file, guessedName),
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }.onFailure {
                     runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
                 }
             }
         }
 
+        val assetLoader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+
         webView.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                val url = request?.url ?: return super.shouldInterceptRequest(view, request)
+                if (url.scheme == "https" && url.host == "appassets.androidplatform.net") {
+                    val res = assetLoader.shouldInterceptRequest(url)
+                    if (res != null) {
+                        if (url.path?.endsWith(".woff2", ignoreCase = true) == true) {
+                            res.mimeType = "font/woff2"
+                        }
+                        val origin = request.requestHeaders?.entries
+                            ?.firstOrNull { it.key.equals("Origin", ignoreCase = true) }
+                            ?.value
+                        if (origin != null && AntigravityFileHelper.isTrustedHubUri(origin)) {
+                            val headers = HashMap(res.responseHeaders ?: emptyMap())
+                            headers["Access-Control-Allow-Origin"] = origin
+                            headers["Vary"] = "Origin"
+                            res.responseHeaders = headers
+                        }
+                        return res
+                    }
+                }
+                return super.shouldInterceptRequest(view, request)
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
                 if (AntigravityFileHelper.isTrustedHubUri(uri.toString())) {
@@ -574,7 +691,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 super.onReceivedError(view, request, error)
                 if (request?.isForMainFrame == true) {
                     reconnectBanner.visibility = View.VISIBLE
-                    txtReconnectBanner.text = "Antigravity Hub unavailable. Reconnecting..."
+                    txtReconnectBanner.text = getString(R.string.agy_reconnect_banner_unavailable)
                     triggerHubReconnectIfNeeded()
                 }
             }
@@ -613,12 +730,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     webView.visibility = View.GONE
                     splashContainer.visibility = View.VISIBLE
                     splashActions.visibility = View.VISIBLE
-                    splashStatus.text = "WebView renderer crashed repeatedly.\nCheck logs, retry, or open the terminal."
+                    splashStatus.text = getString(R.string.agy_splash_render_crash)
                     return true
                 }
 
                 reconnectBanner.visibility = View.VISIBLE
-                txtReconnectBanner.text = "Render process restarted. Reloading..."
+                txtReconnectBanner.text = getString(R.string.agy_reconnect_banner_render_restart)
                 val targetUrl = hubViewModel.currentState.currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
                 if (targetUrl != null) {
                     webView.loadUrl(targetUrl)
@@ -633,6 +750,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 if (AntigravityFileHelper.isTrustedHubUri(url)) {
                     reconnectBanner.visibility = View.GONE
                     injectAgentNotificationBridge()
+                    injectPersianBidiBridge(url)
                     lifecycleScope.launch(Dispatchers.IO) {
                         accountManager.captureActiveAccount()
                     }
@@ -788,9 +906,31 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             callbacks = object : ControlCenterSheetController.Callbacks {
                 override fun onApplyKeepScreenOn(enabled: Boolean) = applyKeepScreenOn(enabled)
                 override fun onApplyCpuWakeLock(enabled: Boolean) = applyCpuWakeLock(enabled)
+                override fun onApplyBidiRtl(enabled: Boolean) {
+                    injectPersianBidiBridge()
+                }
+                override fun onApplyPersianUi(enabled: Boolean) {
+                    injectPersianBidiBridge()
+                    val targetLocales = if (enabled) {
+                        LocaleListCompat.forLanguageTags("fa")
+                    } else {
+                        LocaleListCompat.getEmptyLocaleList()
+                    }
+                    if (AppCompatDelegate.getApplicationLocales() != targetLocales) {
+                        AppCompatDelegate.setApplicationLocales(targetLocales)
+                    }
+                }
                 override fun onSendTestNotification() {
-                    showAgentDoneNotification("Antigravity", "Agent task finished — ready for review.", force = true)
-                    Toast.makeText(this@AntigravityMainActivity, "Test notification sent", Toast.LENGTH_SHORT).show()
+                    showAgentDoneNotification(
+                        getString(R.string.antigravity_app_name),
+                        getString(R.string.agy_notif_test_body),
+                        force = true
+                    )
+                    Toast.makeText(
+                        this@AntigravityMainActivity,
+                        getString(R.string.agy_toast_test_notif_sent),
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
                 override fun onAddAccount() = startAddAccountFlow()
                 override fun onSwitchAccount(account: AccountProfile) = switchAccountNow(account)
@@ -814,7 +954,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 override fun onRestartHub() {
                     if (isHubRestartInFlight || hubViewModel.currentState.isSwitchingAccount) return
                     isHubRestartInFlight = true
-                    txtReconnectBanner.text = "Restarting Antigravity Hub..."
+                    txtReconnectBanner.text = getString(R.string.agy_reconnect_banner_restarting)
                     reconnectBanner.visibility = View.VISIBLE
                     lifecycleScope.launch {
                         try {
@@ -832,7 +972,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                                 webView.loadUrl(newUrl)
                             } else {
                                 reconnectBanner.visibility = View.GONE
-                                Toast.makeText(this@AntigravityMainActivity, "Failed to restart Hub", Toast.LENGTH_LONG).show()
+                                Toast.makeText(
+                                    this@AntigravityMainActivity,
+                                    getString(R.string.agy_toast_hub_restart_failed),
+                                    Toast.LENGTH_LONG
+                                ).show()
                             }
                         } finally {
                             isHubRestartInFlight = false
@@ -845,7 +989,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 override fun onShowLogs() = showHubLogsDialog()
                 override fun onClearWebViewCache() {
                     webView.clearCache(true)
-                    Toast.makeText(this@AntigravityMainActivity, "WebView cache cleared — reloading...", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        this@AntigravityMainActivity,
+                        getString(R.string.agy_toast_cache_cleared),
+                        Toast.LENGTH_SHORT
+                    ).show()
                     val url = hubViewModel.currentState.currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
                     if (url != null) webView.loadUrl(url) else bootAntigravityHub()
                 }
@@ -878,7 +1026,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private fun openOAuthUrlOnUi(oauthUrl: String, statusTarget: TextView? = null) {
         runOnUiThread {
             if (!isFinishing && !isDestroyed) {
-                statusTarget?.text = "Complete Google Sign-In in browser..."
+                statusTarget?.text = getString(R.string.agy_banner_oauth_browser)
                 openExternalUri(Uri.parse(oauthUrl))
             }
         }
@@ -916,7 +1064,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         btnOnboardingAutoInstall.setOnClickListener {
             if (AntigravityEngine.isInstallRunning()) {
-                Toast.makeText(this@AntigravityMainActivity, "Installation already in progress...", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@AntigravityMainActivity, getString(R.string.agy_toast_install_running), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             btnOnboardingAutoInstall.isEnabled = false
@@ -924,7 +1072,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             onboardingProgressBar.visibility = View.VISIBLE
             txtOnboardingProgress.visibility = View.VISIBLE
             onboardingProgressBar.progress = 5
-            txtOnboardingProgress.text = "Starting automatic Antigravity CLI install..."
+            txtOnboardingProgress.text = getString(R.string.agy_install_starting)
             lifecycleScope.launch {
                 try {
                     val res = AntigravityEngine.installAntigravityCli(this@AntigravityMainActivity) { pct, msg ->
@@ -937,11 +1085,19 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     }
                     if (isFinishing || isDestroyed) return@launch
                     res.onSuccess {
-                        Toast.makeText(this@AntigravityMainActivity, "Installed! Booting Antigravity...", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            this@AntigravityMainActivity,
+                            getString(R.string.agy_toast_installed_booting),
+                            Toast.LENGTH_SHORT
+                        ).show()
                         bootAntigravityHub()
                     }.onFailure { err ->
-                        txtOnboardingProgress.text = "Install failed: ${err.message}"
-                        Toast.makeText(this@AntigravityMainActivity, "Auto-install failed: ${err.message}", Toast.LENGTH_LONG).show()
+                        txtOnboardingProgress.text = getString(R.string.agy_install_failed_status, err.message ?: "")
+                        Toast.makeText(
+                            this@AntigravityMainActivity,
+                            getString(R.string.agy_toast_auto_install_failed, err.message ?: ""),
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
                 } finally {
                     if (!isFinishing && !isDestroyed) {
@@ -954,7 +1110,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         findViewById<View>(R.id.btn_copy_port_cmd).setOnClickListener {
             val cmd = "pkg install -y zstd tar && tar -cf - -C /data/data/com.termux/files --exclude='./usr/var/cache/*' --exclude='./usr/tmp/*' ./usr ./home | zstd -6 -T2 -o /sdcard/Download/termux-port.tar.zst && zstd -t /sdcard/Download/termux-port.tar.zst"
             copyToClipboard("Termux Port Command", cmd)
-            Toast.makeText(this, "Copied Termux port command to clipboard", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, getString(R.string.agy_toast_port_cmd_copied), Toast.LENGTH_LONG).show()
         }
         btnOnboardingImport.setOnClickListener {
             promptRestoreArchive(
@@ -995,10 +1151,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private fun runBootstrapSequence() {
         if (BuildConfig.AGY_LITE_UPDATE && !AntigravityEngine.isBootstrapReady()) {
             findViewById<View>(R.id.agy_splash_progress).visibility = View.GONE
-            splashStatus.text = "This is a Lite Update APK.\nInstall the full AntigravityStandalone.apk first, then apply this update."
+            splashStatus.text = getString(R.string.agy_splash_lite_error)
             return
         }
-        splashStatus.text = "Preparing embedded Linux engine..."
+        splashStatus.text = getString(R.string.agy_splash_preparing_engine)
         TermuxInstaller.setupBootstrapIfNeeded(this) {
             if (isFinishing || isDestroyed) return@setupBootstrapIfNeeded
             hubViewModel.markBootstrapComplete()
@@ -1046,9 +1202,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private fun updateSetupButtons() {
         val storageOk = hasAllFilesAccess()
         val batteryOk = isIgnoringBatteryOptimizations()
-        btnGrantStorage.text = if (storageOk) "All Files Access Granted" else "Grant All Files Access"
+        btnGrantStorage.text = getString(if (storageOk) R.string.agy_btn_grant_storage_ok else R.string.agy_btn_grant_storage)
         btnGrantStorage.alpha = if (storageOk) 0.65f else 1.0f
-        btnGrantBattery.text = if (batteryOk) "Battery Optimization Disabled" else "Disable Battery Optimization"
+        btnGrantBattery.text = getString(if (batteryOk) R.string.agy_btn_grant_battery_ok else R.string.agy_btn_grant_battery)
         btnGrantBattery.alpha = if (batteryOk) 0.65f else 1.0f
     }
 
@@ -1096,7 +1252,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                         }
                     }
                 } else if (AntigravityEngine.isAgyInstalled()) {
-                    txtReconnectBanner.text = "Reconnecting to Antigravity Hub..."
+                    txtReconnectBanner.text = getString(R.string.agy_reconnect_banner_default)
                     reconnectBanner.visibility = View.VISIBLE
                     AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
                     val newUrl = AntigravityEngine.pollForHubUrl(12000L) { oauthUrl ->
@@ -1112,7 +1268,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                             webView.reload()
                         }
                     } else {
-                        txtReconnectBanner.text = "Hub offline — tap Control Center to restart"
+                        txtReconnectBanner.text = getString(R.string.agy_reconnect_banner_offline)
                     }
                 }
             } finally {
@@ -1187,19 +1343,14 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         if (master.isFile) {
             val mb = master.length() / (1024.0 * 1024.0)
             txtDetectedBackup.visibility = View.VISIBLE
-            txtDetectedBackup.text = String.format(
-                Locale.US,
-                "Detected master backup: %s (%.1f MB)",
-                master.name,
-                mb
-            )
+            txtDetectedBackup.text = getString(R.string.agy_detected_master_backup, master.name, mb)
         } else {
             val others = BackupRestoreEngine.findDownloadBackups()
             if (others.isNotEmpty()) {
                 val f = others.first()
                 val mb = f.length() / (1024.0 * 1024.0)
                 txtDetectedBackup.visibility = View.VISIBLE
-                txtDetectedBackup.text = String.format(Locale.US, "Detected backup: %s (%.1f MB)", f.name, mb)
+                txtDetectedBackup.text = getString(R.string.agy_detected_backup, f.name, mb)
             } else {
                 txtDetectedBackup.visibility = View.GONE
             }
@@ -1212,7 +1363,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         setupContainer.visibility = View.GONE
         splashContainer.visibility = View.VISIBLE
         splashActions.visibility = View.GONE
-        splashStatus.text = "Starting Antigravity Hub..."
+        splashStatus.text = getString(R.string.agy_splash_starting_hub)
 
         lifecycleScope.launch {
             AntigravityEngine.externalUrlHandlerActive = true
@@ -1238,13 +1389,13 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                         showTerminalView()
                     }
                 } else {
-                    splashStatus.text = "Antigravity Hub did not start in time.\nCheck logs, retry, or open the terminal."
+                    splashStatus.text = getString(R.string.agy_splash_hub_timeout)
                     splashActions.visibility = View.VISIBLE
                     floatingPill.visibility = View.VISIBLE
                     pillController.restorePositionIfNeeded()
                     Toast.makeText(
                         this@AntigravityMainActivity,
-                        "Hub startup timed out — check Control Center or Built-in Terminal",
+                        getString(R.string.agy_toast_hub_timeout),
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -1308,13 +1459,13 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             }
             val scroll = ScrollView(this@AntigravityMainActivity).apply { addView(tv) }
             AlertDialog.Builder(this@AntigravityMainActivity)
-                .setTitle("Antigravity Hub Logs")
+                .setTitle(R.string.agy_dialog_logs_title)
                 .setView(scroll)
-                .setPositiveButton("Copy") { _, _ ->
+                .setPositiveButton(R.string.agy_btn_copy) { _, _ ->
                     copyToClipboard("Antigravity Logs", logContent)
-                    Toast.makeText(this@AntigravityMainActivity, "Logs copied to clipboard", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@AntigravityMainActivity, getString(R.string.agy_toast_logs_copied), Toast.LENGTH_SHORT).show()
                 }
-                .setNegativeButton("Close", null)
+                .setNegativeButton(R.string.agy_btn_close, null)
                 .show()
         }
     }
@@ -1354,7 +1505,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         }
         if (switched == null) {
             reconnectBanner.visibility = View.GONE
-            Toast.makeText(this@AntigravityMainActivity, "Failed to load credentials for ${target.email}", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                this@AntigravityMainActivity,
+                getString(R.string.agy_toast_cred_load_failed, target.email),
+                Toast.LENGTH_LONG
+            ).show()
             return null
         }
         clearWebViewSessionData()
@@ -1370,17 +1525,21 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             floatingPill.visibility = View.VISIBLE
             webView.loadUrl(newUrl)
             val msg = if (autoReason != null) {
-                "Quota drained — auto-switched to ${switched.email}"
+                getString(R.string.agy_toast_auto_switched, switched.email)
             } else {
-                "Switched to ${switched.email}"
+                getString(R.string.agy_toast_switched_account, switched.email)
             }
             Toast.makeText(this@AntigravityMainActivity, msg, Toast.LENGTH_LONG).show()
             if (autoReason != null) {
-                showAgentDoneNotification("Account Auto-Switched", msg, force = true)
+                showAgentDoneNotification(getString(R.string.agy_notif_auto_switched_title), msg, force = true)
             }
         } else {
             reconnectBanner.visibility = View.GONE
-            Toast.makeText(this@AntigravityMainActivity, "Switched credentials, but Hub failed to restart", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                this@AntigravityMainActivity,
+                getString(R.string.agy_toast_switched_hub_failed),
+                Toast.LENGTH_LONG
+            ).show()
         }
         return newUrl
     }
@@ -1392,9 +1551,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     ) {
         if (!hubViewModel.tryBeginAccountSwitch()) return
         val bannerMsg = if (autoReason != null) {
-            "Quota drained — switching to ${target.email}..."
+            getString(R.string.agy_banner_switching_quota, target.email)
         } else {
-            "Switching to ${target.email}..."
+            getString(R.string.agy_banner_switching_account, target.email)
         }
         txtReconnectBanner.text = bannerMsg
         reconnectBanner.visibility = View.VISIBLE
@@ -1411,7 +1570,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
     private fun startAddAccountFlow() {
         if (!hubViewModel.tryBeginAccountSwitch()) return
-        txtReconnectBanner.text = "Preparing Google sign-in... (tap to cancel)"
+        txtReconnectBanner.text = getString(R.string.agy_banner_preparing_signin)
         reconnectBanner.visibility = View.VISIBLE
 
         lateinit var job: kotlinx.coroutines.Job
@@ -1433,7 +1592,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
                     runOnUiThread {
                         if (!isFinishing && !isDestroyed) {
-                            txtReconnectBanner.text = "Complete Google Sign-In in browser (tap to cancel)"
+                            txtReconnectBanner.text = getString(R.string.agy_banner_oauth_cancel)
                         }
                     }
                 }
@@ -1444,7 +1603,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     webView.visibility = View.VISIBLE
                     floatingPill.visibility = View.VISIBLE
                     webView.loadUrl(newUrl)
-                    Toast.makeText(this@AntigravityMainActivity, "Sign in with your next Google account", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        this@AntigravityMainActivity,
+                        getString(R.string.agy_toast_signin_next),
+                        Toast.LENGTH_LONG
+                    ).show()
                 } else {
                     if (previousAccount != null) {
                         withContext(Dispatchers.IO) {
@@ -1454,7 +1617,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     reconnectBanner.visibility = View.GONE
                     Toast.makeText(
                         this@AntigravityMainActivity,
-                        "Failed to restart Hub for login — check Hub Logs in Control Center",
+                        getString(R.string.agy_toast_signin_hub_failed),
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -1472,7 +1635,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                             resolvedUrl = restoredUrl
                             webView.loadUrl(restoredUrl)
                         }
-                        Toast.makeText(this@AntigravityMainActivity, "Account sign-in cancelled", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            this@AntigravityMainActivity,
+                            getString(R.string.agy_toast_signin_cancelled),
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 }
                 throw ce
@@ -1488,16 +1655,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
     private fun showRegionBypassDisclaimerDialog(onCancel: () -> Unit) {
         AlertDialog.Builder(this)
-            .setTitle("Experimental Region Bypass")
-            .setMessage(
-                "This experimental option patches local Antigravity CLI binaries on your device to bypass account region checks. " +
-                    "It may break after CLI updates and is used at your own risk with respect to Google's Terms of Service.\n\n" +
-                    "Enable and restart Antigravity Hub?"
-            )
-            .setPositiveButton("I Understand, Enable") { _, _ ->
+            .setTitle(R.string.agy_dialog_region_bypass_title)
+            .setMessage(R.string.agy_dialog_region_bypass_msg)
+            .setPositiveButton(R.string.agy_dialog_region_bypass_btn) { _, _ ->
                 toggleRegionBypassAndRestart(true)
             }
-            .setNegativeButton("Cancel") { _, _ ->
+            .setNegativeButton(R.string.agy_btn_cancel) { _, _ ->
                 onCancel()
             }
             .setOnCancelListener {
@@ -1509,11 +1672,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private fun toggleRegionBypassAndRestart(enabled: Boolean) {
         if (isHubRestartInFlight || hubViewModel.currentState.isSwitchingAccount) return
         isHubRestartInFlight = true
-        txtReconnectBanner.text = if (enabled) {
-            "Applying region eligibility bypass & restarting Hub..."
-        } else {
-            "Reverting region eligibility bypass & restarting Hub..."
-        }
+        txtReconnectBanner.text = getString(
+            if (enabled) R.string.agy_banner_region_applying else R.string.agy_banner_region_reverting
+        )
         reconnectBanner.visibility = View.VISIBLE
 
         lifecycleScope.launch {
@@ -1529,16 +1690,19 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     hubViewModel.setCurrentHubUrl(newUrl)
                     reconnectBanner.visibility = View.GONE
                     webView.loadUrl(newUrl)
-                    val msg = when {
-                        enabled && patched -> "Region eligibility bypass enabled"
-                        enabled -> "Region bypass saved (binary already patched or not found)"
-                        patched -> "Region eligibility bypass disabled"
-                        else -> "Region bypass disabled"
+                    val msgRes = when {
+                        enabled && patched -> R.string.agy_toast_region_enabled
+                        enabled -> R.string.agy_toast_region_saved
+                        else -> R.string.agy_toast_region_disabled
                     }
-                    Toast.makeText(this@AntigravityMainActivity, msg, Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@AntigravityMainActivity, getString(msgRes), Toast.LENGTH_LONG).show()
                 } else {
                     reconnectBanner.visibility = View.GONE
-                    Toast.makeText(this@AntigravityMainActivity, "Failed to restart Hub — check Hub Logs", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        this@AntigravityMainActivity,
+                        getString(R.string.agy_toast_hub_restart_logs),
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             } finally {
                 isHubRestartInFlight = false
@@ -1558,31 +1722,22 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         if (!alreadyEnabled && !isIpBlock) {
             builder
-                .setTitle("Account Region Not Supported")
-                .setMessage(
-                    "Google reported that this account's region isn't eligible for Antigravity.\n\n" +
-                        "Enable the experimental Region Eligibility Bypass? You can turn it off anytime in Control Center."
-                )
-                .setPositiveButton("Enable & Restart Hub") { _, _ ->
+                .setTitle(R.string.agy_dialog_region_unsupported_title)
+                .setMessage(R.string.agy_dialog_region_unsupported_offer_msg)
+                .setPositiveButton(R.string.agy_dialog_region_enable_restart_btn) { _, _ ->
                     showRegionBypassDisclaimerDialog(onCancel = {})
                 }
-                .setNegativeButton("Dismiss", null)
+                .setNegativeButton(R.string.agy_btn_dismiss, null)
         } else if (isIpBlock) {
             builder
-                .setTitle("Location Blocked by Google")
-                .setMessage(
-                    "Google blocked this request because your current IP or location is not supported by Google Antigravity.\n\n" +
-                        "The account region bypass cannot override IP blocks — connect to a supported region and reload."
-                )
-                .setPositiveButton("OK", null)
+                .setTitle(R.string.agy_dialog_region_ip_title)
+                .setMessage(R.string.agy_dialog_region_ip_msg)
+                .setPositiveButton(R.string.agy_btn_ok, null)
         } else {
             builder
-                .setTitle("Account Region Not Supported")
-                .setMessage(
-                    "Google reported that this account's region is not eligible for Google Antigravity.\n\n" +
-                        "Try signing in with an eligible account or using a supported region."
-                )
-                .setPositiveButton("OK", null)
+                .setTitle(R.string.agy_dialog_region_unsupported_title)
+                .setMessage(R.string.agy_dialog_region_unsupported_msg)
+                .setPositiveButton(R.string.agy_btn_ok, null)
         }
         builder.show()
     }
@@ -1594,7 +1749,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             setPadding(pad, pad / 2, pad, pad / 4)
         }
         val statusView = TextView(this).apply {
-            text = "Preparing update download..."
+            text = getString(R.string.agy_updating_preparing)
             textSize = 13f
             setTextColor(Color.parseColor("#D1D5DB"))
         }
@@ -1615,9 +1770,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         var downloadJob: kotlinx.coroutines.Job? = null
         val dlg = AlertDialog.Builder(this)
-            .setTitle("Updating to ${info.tagName}")
+            .setTitle(getString(R.string.agy_dialog_updating_title, info.tagName))
             .setView(container)
-            .setNegativeButton("Cancel") { _, _ ->
+            .setNegativeButton(R.string.agy_btn_cancel) { _, _ ->
                 downloadJob?.cancel()
             }
             .create()
@@ -1645,7 +1800,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 if (err !is kotlinx.coroutines.CancellationException) {
                     Toast.makeText(
                         this@AntigravityMainActivity,
-                        "Update failed: ${err.message}",
+                        getString(R.string.agy_toast_update_failed, err.message ?: ""),
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -1657,19 +1812,23 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
             pendingUpdateApkFile = apkFile
             AlertDialog.Builder(this)
-                .setTitle("Allow App Installs")
-                .setMessage("Allow Antigravity to install updates from this source, then return to continue installing.")
-                .setPositiveButton("Open Settings") { _, _ ->
+                .setTitle(R.string.agy_dialog_install_perm_title)
+                .setMessage(R.string.agy_dialog_install_perm_msg)
+                .setPositiveButton(R.string.agy_dialog_install_perm_btn) { _, _ ->
                     val intent = Intent(
                         Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                         Uri.parse("package:$packageName")
                     )
                     runCatching { installPermissionLauncher.launch(intent) }
                         .onFailure {
-                            Toast.makeText(this, "Unable to open install settings", Toast.LENGTH_LONG).show()
+                            Toast.makeText(
+                                this,
+                                getString(R.string.agy_toast_unable_open_install_settings),
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
                 }
-                .setNegativeButton("Cancel") { _, _ ->
+                .setNegativeButton(R.string.agy_btn_cancel) { _, _ ->
                     pendingUpdateApkFile = null
                 }
                 .show()
@@ -1677,7 +1836,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         }
         runCatching { startActivity(InAppUpdater.buildInstallIntent(this, apkFile)) }
             .onFailure { err ->
-                Toast.makeText(this, "Unable to launch installer: ${err.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    this,
+                    getString(R.string.agy_toast_unable_launch_installer, err.message ?: ""),
+                    Toast.LENGTH_LONG
+                ).show()
             }
     }
 
@@ -1700,7 +1863,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 }
                 if (isFinishing || isDestroyed) return@launch
                 if (next != null) {
-                    txtReconnectBanner.text = "Quota drained — switching to ${next.email}..."
+                    txtReconnectBanner.text = getString(R.string.agy_banner_switching_quota, next.email)
                     reconnectBanner.visibility = View.VISIBLE
                     newUrl = performAccountSwitch(
                         target = next,
@@ -1710,7 +1873,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 } else {
                     Toast.makeText(
                         this@AntigravityMainActivity,
-                        "Quota drained — no other available account to switch to",
+                        getString(R.string.agy_toast_quota_no_other),
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -1728,7 +1891,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         progressBar.visibility = View.VISIBLE
         statusText.visibility = View.VISIBLE
         progressBar.progress = 2
-        statusText.text = "Starting ${mode.label}..."
+        statusText.text = getString(R.string.agy_backup_starting, mode.label)
 
         lifecycleScope.launch {
             val result = BackupRestoreEngine.createBackup(
@@ -1747,12 +1910,16 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 val mb = res.sizeBytes / (1024.0 * 1024.0)
                 Toast.makeText(
                     this@AntigravityMainActivity,
-                    String.format(Locale.US, "Saved %s (%.1f MB) — sign-in tokens excluded for security", res.displayName, mb),
+                    getString(R.string.agy_toast_backup_saved, res.displayName, mb),
                     Toast.LENGTH_LONG
                 ).show()
             }.onFailure { err ->
-                statusText.text = "Error: ${err.message}"
-                Toast.makeText(this@AntigravityMainActivity, "Backup failed: ${err.message}", Toast.LENGTH_LONG).show()
+                statusText.text = getString(R.string.agy_backup_error, err.message ?: "")
+                Toast.makeText(
+                    this@AntigravityMainActivity,
+                    getString(R.string.agy_toast_backup_failed, err.message ?: ""),
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
@@ -1767,10 +1934,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             val mb = f.length() / (1024.0 * 1024.0)
             String.format(Locale.US, "%s (%.1f MB)", f.name, mb)
         }.toMutableList()
-        labels.add("Browse file picker...")
+        labels.add(getString(R.string.agy_restore_browse_picker))
 
         AlertDialog.Builder(this)
-            .setTitle("Select Offline Backup (.tar.zst)")
+            .setTitle(R.string.agy_dialog_restore_title)
             .setItems(labels.toTypedArray()) { _, which ->
                 if (which < found.size) {
                     executeRestoreFile(found[which], progressBar, statusView, sheetToDismiss)
@@ -1781,7 +1948,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     backupFilePickerLauncher.launch(arrayOf("*/*"))
                 }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(R.string.agy_btn_cancel, null)
             .show()
     }
 
@@ -1794,7 +1961,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         progressBar.visibility = View.VISIBLE
         statusView.visibility = View.VISIBLE
         progressBar.progress = 1
-        statusView.text = "Preparing restore..."
+        statusView.text = getString(R.string.agy_restore_preparing)
 
         lifecycleScope.launch {
             val result = BackupRestoreEngine.restoreBackup(
@@ -1812,12 +1979,20 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 if (isFinishing || isDestroyed) return@onSuccess
                 if (sheetToDismiss?.isShowing == true) sheetToDismiss.dismiss()
                 pendingRestoreDialog = null
-                Toast.makeText(this@AntigravityMainActivity, "Restore complete! Booting Antigravity...", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@AntigravityMainActivity,
+                    getString(R.string.agy_toast_restore_complete),
+                    Toast.LENGTH_SHORT
+                ).show()
                 bootAntigravityHub()
             }.onFailure { err ->
                 if (isFinishing || isDestroyed) return@onFailure
-                statusView.text = "Restore failed: ${err.message}"
-                Toast.makeText(this@AntigravityMainActivity, "Restore failed: ${err.message}", Toast.LENGTH_LONG).show()
+                statusView.text = getString(R.string.agy_restore_failed, err.message ?: "")
+                Toast.makeText(
+                    this@AntigravityMainActivity,
+                    getString(R.string.agy_restore_failed, err.message ?: ""),
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
@@ -1841,7 +2016,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         progressBar.visibility = View.VISIBLE
         statusView.visibility = View.VISIBLE
         progressBar.progress = 1
-        statusView.text = "Reading $displayName..."
+        statusView.text = getString(R.string.agy_restore_reading, displayName)
 
         lifecycleScope.launch {
             val result = BackupRestoreEngine.restoreFromInputStream(
@@ -1861,11 +2036,19 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             result.onSuccess {
                 if (sheet?.isShowing == true) sheet.dismiss()
                 pendingRestoreDialog = null
-                Toast.makeText(this@AntigravityMainActivity, "Restore complete! Booting Antigravity...", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@AntigravityMainActivity,
+                    getString(R.string.agy_toast_restore_complete),
+                    Toast.LENGTH_SHORT
+                ).show()
                 bootAntigravityHub()
             }.onFailure { err ->
-                statusView.text = "Restore failed: ${err.message}"
-                Toast.makeText(this@AntigravityMainActivity, "Restore failed: ${err.message}", Toast.LENGTH_LONG).show()
+                statusView.text = getString(R.string.agy_restore_failed, err.message ?: "")
+                Toast.makeText(
+                    this@AntigravityMainActivity,
+                    getString(R.string.agy_restore_failed, err.message ?: ""),
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
@@ -1884,7 +2067,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             finish()
         } else {
             lastBackPressedMs = now
-            Toast.makeText(this, "Press back again to exit Antigravity", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.agy_toast_press_back_again), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1936,8 +2119,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         fun notify(title: String?, body: String?) {
             runIfTrustedHub {
                 showAgentDoneNotification(
-                    title = title?.ifBlank { "Antigravity" } ?: "Antigravity",
-                    body = body?.ifBlank { "Agent task finished" } ?: "Agent task finished",
+                    title = title?.ifBlank { getString(R.string.antigravity_app_name) }
+                        ?: getString(R.string.antigravity_app_name),
+                    body = body?.ifBlank { getString(R.string.agy_notif_default_body) }
+                        ?: getString(R.string.agy_notif_default_body),
                     force = false
                 )
             }
@@ -1947,8 +2132,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         fun onAgentJobFinished(summary: String?) {
             runIfTrustedHub {
                 showAgentDoneNotification(
-                    title = "Antigravity",
-                    body = summary?.ifBlank { "Agent finished its task" } ?: "Agent finished its task",
+                    title = getString(R.string.antigravity_app_name),
+                    body = summary?.ifBlank { getString(R.string.agy_notif_agent_finished_summary) }
+                        ?: getString(R.string.agy_notif_agent_finished_summary),
                     force = false
                 )
             }
@@ -1979,7 +2165,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         @JavascriptInterface
         fun notifyDownloadTooLarge() {
             runIfTrustedHub {
-                Toast.makeText(this@AntigravityMainActivity, "Blob download exceeds 25 MB limit", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    this@AntigravityMainActivity,
+                    getString(R.string.agy_toast_blob_too_large),
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
 
@@ -1995,9 +2185,17 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     withContext(Dispatchers.Main) {
                         if (isFinishing || isDestroyed) return@withContext
                         res.onSuccess { displayPath ->
-                            Toast.makeText(this@AntigravityMainActivity, "Saved to $displayPath", Toast.LENGTH_LONG).show()
+                            Toast.makeText(
+                                this@AntigravityMainActivity,
+                                getString(R.string.agy_toast_saved_to, displayPath),
+                                Toast.LENGTH_LONG
+                            ).show()
                         }.onFailure { err ->
-                            Toast.makeText(this@AntigravityMainActivity, "Download failed: ${err.message}", Toast.LENGTH_LONG).show()
+                            Toast.makeText(
+                                this@AntigravityMainActivity,
+                                getString(R.string.agy_toast_download_failed, err.message ?: ""),
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
                     }
                 }

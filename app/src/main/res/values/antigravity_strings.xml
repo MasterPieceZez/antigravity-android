@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Control Center -->
+    <string name="agy_control_center_title">Antigravity Control Center</string>
+    <string name="agy_status_engine_checking">Embedded Engine: Checking…</string>
+    <string name="agy_status_engine_active">Embedded Engine: Active (%1$s)</string>
+    <string name="agy_status_engine_init">Embedded Engine: Initializing</string>
+    <string name="agy_status_hub_checking">Antigravity Hub (4400): Checking…</string>
+    <string name="agy_status_hub_online">Antigravity Hub (4400): Online</string>
+    <string name="agy_status_hub_offline">Antigravity Hub (4400): Offline</string>
+    <string name="agy_status_data_saver">Data Saver: AGY_CLI_DISABLE_AUTO_UPDATE=1</string>
+
+    <string name="agy_section_accounts">Accounts &amp; Quota Failover</string>
+    <string name="agy_active_account_checking">Active: Checking…</string>
+    <string name="agy_active_account_email">Active: %1$s</string>
+    <string name="agy_active_account_none">No active account signed in</string>
+    <string name="agy_accounts_empty">Sign in to Antigravity, then tap \'+ Add Account\' to save multiple accounts for 1-tap switching.</string>
+    <string name="agy_account_suffix_active">\u0020\u0020• Active</string>
+    <string name="agy_account_suffix_cooldown">\u0020\u0020• Cooldown</string>
+    <string name="agy_btn_switch">Switch</string>
+    <string name="agy_btn_add_account">+ Add Account</string>
+    <string name="agy_switch_auto_quota">Auto-switch account when quota drains</string>
+    <string name="agy_switch_region_bypass">Region eligibility bypass (experimental)</string>
+    <string name="agy_toast_account_removed">Removed %1$s</string>
+
+    <string name="agy_section_language_bidi">Language &amp; BiDi / فارسی</string>
+    <string name="agy_switch_smart_bidi">Smart BiDi / RTL</string>
+    <string name="agy_switch_persian_ui">Persian UI (فارسی)</string>
+
+    <string name="agy_section_quick_actions">Quick Actions</string>
+    <string name="agy_btn_reload_ui">Reload UI</string>
+    <string name="agy_btn_restart_hub">Restart Hub</string>
+    <string name="agy_btn_builtin_terminal">Built-in Terminal</string>
+    <string name="agy_btn_view_logs">View Hub Logs</string>
+    <string name="agy_btn_clear_cache">Clear Cache</string>
+    <string name="agy_btn_check_updates">Check Updates</string>
+    <string name="agy_btn_reinstall_cli">Reinstall / Update Antigravity CLI</string>
+
+    <string name="agy_section_power_alerts">Power &amp; Agent Alerts</string>
+    <string name="agy_switch_keep_screen_on">Keep screen awake while open</string>
+    <string name="agy_switch_cpu_wakelock">Hold background CPU Wake Lock</string>
+    <string name="agy_switch_notify_done">Notify when agent finishes a job</string>
+    <string name="agy_switch_notify_foreground">Also notify while app is open</string>
+    <string name="agy_btn_test_alert">Test Alert</string>
+    <string name="agy_btn_android12_fix">Android 12+ Fix</string>
+
+    <string name="agy_section_backup">Offline Backup &amp; Restore (.tar.zst)</string>
+    <string name="agy_btn_backup_full">Full Backup</string>
+    <string name="agy_btn_backup_packages">Packages-Only</string>
+    <string name="agy_btn_restore_backup">Restore Backup (.tar.zst)</string>
+
+    <!-- Main / Splash / Setup / Onboarding -->
+    <string name="agy_reconnect_banner_default">Reconnecting to Antigravity Hub…</string>
+    <string name="agy_reconnect_banner_unavailable">Antigravity Hub unavailable. Reconnecting…</string>
+    <string name="agy_reconnect_banner_render_restart">Render process restarted. Reloading…</string>
+    <string name="agy_reconnect_banner_restarting">Restarting Antigravity Hub…</string>
+    <string name="agy_reconnect_banner_offline">Hub offline — tap Control Center to restart</string>
+    <string name="agy_terminal_title">Built-in Terminal</string>
+    <string name="agy_btn_back">Back</string>
+    <string name="agy_splash_preparing_engine">Preparing embedded Linux engine…</string>
+    <string name="agy_splash_starting_engine">Starting embedded Linux engine…</string>
+    <string name="agy_splash_starting_hub">Starting Antigravity Hub…</string>
+    <string name="agy_splash_lite_error">This is a Lite Update APK.\nInstall the full AntigravityStandalone.apk first, then apply this update.</string>
+    <string name="agy_splash_render_crash">WebView renderer crashed repeatedly.\nCheck logs, retry, or open the terminal.</string>
+    <string name="agy_splash_hub_timeout">Antigravity Hub did not start in time.\nCheck logs, retry, or open the terminal.</string>
+    <string name="agy_btn_retry_hub">Retry Hub</string>
+    <string name="agy_btn_terminal_short">Terminal</string>
+    <string name="agy_btn_logs_short">Logs</string>
+
+    <string name="agy_setup_title">Device Access Setup</string>
+    <string name="agy_setup_subtitle">Grant storage and background permissions so Antigravity can access phone files, restore offline backups, and stay alive in the background.</string>
+    <string name="agy_btn_grant_storage">Grant All Files Access</string>
+    <string name="agy_btn_grant_storage_ok">All Files Access Granted</string>
+    <string name="agy_btn_grant_battery">Disable Battery Optimization</string>
+    <string name="agy_btn_grant_battery_ok">Battery Optimization Disabled</string>
+    <string name="agy_btn_skip">Skip</string>
+    <string name="agy_btn_continue">Continue</string>
+
+    <string name="agy_onboarding_title">Antigravity Environment Ready</string>
+    <string name="agy_onboarding_subtitle">Embedded Linux shell is active, but Antigravity CLI (~/.local/bin/agy) is not installed yet.</string>
+    <string name="agy_onboarding_auto_install">Install Antigravity Automatically</string>
+    <string name="agy_onboarding_import">Import Backup / Port Termux (.tar.zst)</string>
+    <string name="agy_onboarding_open_terminal">Open Built-in Terminal</string>
+    <string name="agy_onboarding_port_title">Porting libraries from stock Termux?</string>
+    <string name="agy_onboarding_port_desc">Run the export command in stock Termux before uninstalling, then tap Import Backup above to port all your packages offline.</string>
+    <string name="agy_btn_copy_port_cmd">Copy Termux Port Command</string>
+    <string name="agy_detected_master_backup">Detected master backup: %1$s (%2$.1f MB)</string>
+    <string name="agy_detected_backup">Detected backup: %1$s (%2$.1f MB)</string>
+
+    <!-- Dialogs & Toasts -->
+    <string name="agy_btn_cancel">Cancel</string>
+    <string name="agy_btn_close">Close</string>
+    <string name="agy_btn_copy">Copy</string>
+    <string name="agy_btn_ok">OK</string>
+    <string name="agy_btn_dismiss">Dismiss</string>
+    <string name="agy_btn_later">Later</string>
+
+    <string name="agy_dialog_reinstall_title">Reinstall / Update CLI</string>
+    <string name="agy_dialog_reinstall_msg">Stop Antigravity Hub and run the official Antigravity CLI installer from https://antigravity.google/cli/install.sh?</string>
+    <string name="agy_dialog_reinstall_btn">Reinstall</string>
+
+    <string name="agy_toast_checking_updates">Checking GitHub Releases…</string>
+    <string name="agy_dialog_update_title">Update Available (%1$s)</string>
+    <string name="agy_dialog_update_msg_lite">Installed: %1$s\nLatest: %2$s\n\nDownload and install the lightweight universal-lite update?</string>
+    <string name="agy_dialog_update_msg_full">Installed: %1$s\nLatest: %2$s\n\nDownload and install the updated APK from GitHub Releases?</string>
+    <string name="agy_dialog_update_btn">Download &amp; Install</string>
+    <string name="agy_toast_up_to_date">You\'re up to date (%1$s)</string>
+    <string name="agy_toast_update_check_failed">Update check failed: %1$s</string>
+    <string name="agy_dialog_updating_title">Updating to %1$s</string>
+    <string name="agy_updating_preparing">Preparing update download…</string>
+    <string name="agy_toast_update_failed">Update failed: %1$s</string>
+    <string name="agy_dialog_install_perm_title">Allow App Installs</string>
+    <string name="agy_dialog_install_perm_msg">Allow Antigravity to install updates from this source, then return to continue installing.</string>
+    <string name="agy_dialog_install_perm_btn">Open Settings</string>
+    <string name="agy_toast_unable_open_install_settings">Unable to launch install settings</string>
+    <string name="agy_toast_unable_launch_installer">Unable to launch installer: %1$s</string>
+
+    <string name="agy_dialog_phantom_title">Android 12+ Phantom Process Fix</string>
+    <string name="agy_dialog_phantom_msg">If Android kills heavy builds (npm/cargo/gradle) after >32 child processes, run this once via ADB or Shizuku:\n\n%1$s</string>
+    <string name="agy_dialog_phantom_btn">Copy Command</string>
+    <string name="agy_toast_phantom_copied">Copied ADB command to clipboard</string>
+
+    <string name="agy_dialog_logs_title">Antigravity Hub Logs</string>
+    <string name="agy_toast_logs_copied">Logs copied to clipboard</string>
+
+    <string name="agy_dialog_region_bypass_title">Experimental Region Bypass</string>
+    <string name="agy_dialog_region_bypass_msg">This experimental option patches local Antigravity CLI binaries on your device to bypass account region checks. It may break after CLI updates and is used at your own risk with respect to Google\'s Terms of Service.\n\nEnable and restart Antigravity Hub?</string>
+    <string name="agy_dialog_region_bypass_btn">I Understand, Enable</string>
+    <string name="agy_banner_region_applying">Applying region eligibility bypass &amp; restarting Hub…</string>
+    <string name="agy_banner_region_reverting">Reverting region eligibility bypass &amp; restarting Hub…</string>
+    <string name="agy_toast_region_enabled">Region eligibility bypass enabled</string>
+    <string name="agy_toast_region_saved">Region bypass saved (binary already patched or not found)</string>
+    <string name="agy_toast_region_disabled">Region eligibility bypass disabled</string>
+
+    <string name="agy_dialog_region_unsupported_title">Account Region Not Supported</string>
+    <string name="agy_dialog_region_unsupported_offer_msg">Google reported that this account\'s region isn\'t eligible for Antigravity.\n\nEnable the experimental Region Eligibility Bypass? You can turn it off anytime in Control Center.</string>
+    <string name="agy_dialog_region_enable_restart_btn">Enable &amp; Restart Hub</string>
+    <string name="agy_dialog_region_ip_title">Location Blocked by Google</string>
+    <string name="agy_dialog_region_ip_msg">Google blocked this request because your current IP or location is not supported by Google Antigravity.\n\nThe account region bypass cannot override IP blocks — connect to a supported region and reload.</string>
+    <string name="agy_dialog_region_unsupported_msg">Google reported that this account\'s region is not eligible for Google Antigravity.\n\nTry signing in with an eligible account or using a supported region.</string>
+
+    <string name="agy_toast_mic_denied">Microphone permission denied</string>
+    <string name="agy_toast_shared_text_copied">Shared text copied — paste into Antigravity</string>
+    <string name="agy_toast_shared_one_saved">Saved to %1$s (path copied)</string>
+    <string name="agy_toast_shared_multi_saved">Saved %1$d files to inbox (paths copied)</string>
+    <string name="agy_toast_shared_failed">Could not import shared file</string>
+    <string name="agy_toast_saved_to">Saved to %1$s</string>
+    <string name="agy_toast_download_failed">Download failed: %1$s</string>
+    <string name="agy_toast_blob_too_large">Blob download exceeds 25 MB limit</string>
+    <string name="agy_toast_downloading_file">Downloading %1$s…</string>
+    <string name="agy_toast_test_notif_sent">Test notification sent</string>
+    <string name="agy_toast_hub_restart_failed">Failed to restart Hub</string>
+    <string name="agy_toast_hub_restart_logs">Failed to restart Hub — check Hub Logs</string>
+    <string name="agy_toast_cache_cleared">WebView cache cleared — reloading…</string>
+    <string name="agy_toast_install_running">Installation already in progress…</string>
+    <string name="agy_install_starting">Starting automatic Antigravity CLI install…</string>
+    <string name="agy_toast_installed_booting">Installed! Booting Antigravity…</string>
+    <string name="agy_install_failed_status">Install failed: %1$s</string>
+    <string name="agy_toast_auto_install_failed">Auto-install failed: %1$s</string>
+    <string name="agy_toast_port_cmd_copied">Copied Termux port command to clipboard</string>
+    <string name="agy_toast_hub_timeout">Hub startup timed out — check Control Center or Built-in Terminal</string>
+    <string name="agy_banner_oauth_browser">Complete Google Sign-In in browser…</string>
+    <string name="agy_banner_oauth_cancel">Complete Google Sign-In in browser (tap to cancel)</string>
+    <string name="agy_banner_preparing_signin">Preparing Google sign-in… (tap to cancel)</string>
+    <string name="agy_toast_signin_next">Sign in with your next Google account</string>
+    <string name="agy_toast_signin_hub_failed">Failed to restart Hub for login — check Hub Logs in Control Center</string>
+    <string name="agy_toast_signin_cancelled">Account sign-in cancelled</string>
+    <string name="agy_toast_cred_load_failed">Failed to load credentials for %1$s</string>
+    <string name="agy_toast_switched_account">Switched to %1$s</string>
+    <string name="agy_toast_auto_switched">Quota drained — auto-switched to %1$s</string>
+    <string name="agy_toast_switched_hub_failed">Switched credentials, but Hub failed to restart</string>
+    <string name="agy_banner_switching_account">Switching to %1$s…</string>
+    <string name="agy_banner_switching_quota">Quota drained — switching to %1$s…</string>
+    <string name="agy_toast_quota_no_other">Quota drained — no other available account to switch to</string>
+    <string name="agy_backup_starting">Starting %1$s…</string>
+    <string name="agy_toast_backup_saved">Saved %1$s (%2$.1f MB) — sign-in tokens excluded for security</string>
+    <string name="agy_backup_error">Error: %1$s</string>
+    <string name="agy_toast_backup_failed">Backup failed: %1$s</string>
+    <string name="agy_restore_browse_picker">Browse file picker…</string>
+    <string name="agy_dialog_restore_title">Select Offline Backup (.tar.zst)</string>
+    <string name="agy_restore_preparing">Preparing restore…</string>
+    <string name="agy_restore_reading">Reading %1$s…</string>
+    <string name="agy_toast_restore_complete">Restore complete! Booting Antigravity…</string>
+    <string name="agy_restore_failed">Restore failed: %1$s</string>
+    <string name="agy_toast_press_back_again">Press back again to exit Antigravity</string>
+
+    <!-- Notifications -->
+    <string name="agy_notif_channel_name">Antigravity Agent Alerts</string>
+    <string name="agy_notif_channel_desc">Alerts when an Antigravity agent finishes a task</string>
+    <string name="agy_notif_default_body">Agent task finished</string>
+    <string name="agy_notif_agent_finished_summary">Agent finished its task</string>
+    <string name="agy_notif_test_body">Agent task finished — ready for review.</string>
+    <string name="agy_notif_auto_switched_title">Account Auto-Switched</string>
+    <string name="agy_notif_signin_title">Antigravity Sign-In</string>
+    <string name="agy_notif_signin_body">Tap to open browser and complete authentication</string>
+</resources>

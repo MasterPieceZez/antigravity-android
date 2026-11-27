@@ -465,4 +465,60 @@ class AntigravityCoreTest {
         assertEquals(128L * 1024L * 1024L, BackupRestoreEngine.estimateRequiredBackupBytes(50L * 1024L * 1024L))
         assertEquals(300L * 1024L * 1024L, BackupRestoreEngine.estimateRequiredBackupBytes(900L * 1024L * 1024L))
     }
+
+    @Test
+    fun persianBidiJs_respectsFlagsAndContainsCssAndReactSafeHooks() {
+        val bidiOnly = AntigravityJsBridge.buildPersianBidiJs(enableBidi = true, enablePersianUi = false)
+        assertTrue(bidiOnly.contains("var enableBidi = true;"))
+        assertTrue(bidiOnly.contains("var enablePersianUi = false;"))
+        assertTrue(bidiOnly.contains("agy-bidi-style"))
+        assertTrue(bidiOnly.contains("Vazirmatn-NL.woff2"))
+        assertTrue(bidiOnly.contains("U+0600-06FF"))
+        assertTrue(bidiOnly.contains("unicode-bidi: plaintext"))
+        assertTrue(bidiOnly.contains("direction: ltr !important"))
+        assertTrue(bidiOnly.contains("WeakMap"))
+        assertTrue(bidiOnly.contains("MutationObserver"))
+
+        val persianUiOnly = AntigravityJsBridge.buildPersianBidiJs(enableBidi = false, enablePersianUi = true)
+        assertTrue(persianUiOnly.contains("var enableBidi = false;"))
+        assertTrue(persianUiOnly.contains("var enablePersianUi = true;"))
+        assertTrue(persianUiOnly.contains("Ask anything, @ to mention, / for actions"))
+        assertTrue(persianUiOnly.contains("پروژه‌ها"))
+        assertTrue(persianUiOnly.contains("توقف"))
+
+        val bothOff = AntigravityJsBridge.buildPersianBidiJs(enableBidi = false, enablePersianUi = false)
+        assertTrue(bothOff.contains("var enableBidi = false;"))
+        assertTrue(bothOff.contains("var enablePersianUi = false;"))
+    }
+
+    @Test
+    fun persianBidiPreferences_haveExpectedDefaultsAndOverrides() {
+        assertTrue(AntigravityJsBridge.DEFAULT_BIDI_RTL_ENABLED)
+        assertFalse(AntigravityJsBridge.DEFAULT_PERSIAN_UI_ENABLED)
+
+        val backing = HashMap<String, Any?>()
+        val fakePrefs = object : android.content.SharedPreferences {
+            override fun getAll(): MutableMap<String, *> = backing
+            override fun getString(key: String?, defValue: String?): String? = backing[key] as? String ?: defValue
+            @Suppress("UNCHECKED_CAST")
+            override fun getStringSet(key: String?, defValues: MutableSet<String>?): MutableSet<String>? =
+                backing[key] as? MutableSet<String> ?: defValues
+            override fun getInt(key: String?, defValue: Int): Int = backing[key] as? Int ?: defValue
+            override fun getLong(key: String?, defValue: Long): Long = backing[key] as? Long ?: defValue
+            override fun getFloat(key: String?, defValue: Float): Float = backing[key] as? Float ?: defValue
+            override fun getBoolean(key: String?, defValue: Boolean): Boolean = backing[key] as? Boolean ?: defValue
+            override fun contains(key: String?): Boolean = backing.containsKey(key)
+            override fun edit(): android.content.SharedPreferences.Editor = throw UnsupportedOperationException()
+            override fun registerOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
+            override fun unregisterOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
+        }
+
+        assertTrue(AntigravityJsBridge.isBidiRtlEnabled(fakePrefs))
+        assertFalse(AntigravityJsBridge.isPersianUiEnabled(fakePrefs))
+
+        backing[AntigravityJsBridge.KEY_BIDI_RTL_ENABLED] = false
+        backing[AntigravityJsBridge.KEY_PERSIAN_UI_ENABLED] = true
+        assertFalse(AntigravityJsBridge.isBidiRtlEnabled(fakePrefs))
+        assertTrue(AntigravityJsBridge.isPersianUiEnabled(fakePrefs))
+    }
 }

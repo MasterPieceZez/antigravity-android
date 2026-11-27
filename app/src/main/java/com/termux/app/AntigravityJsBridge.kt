@@ -1,15 +1,47 @@
 package com.termux.app
 
+import android.content.Context
+import android.content.SharedPreferences
 import org.json.JSONObject
 
 /**
  * JavaScript snippets injected into the trusted Antigravity Hub WebView
- * for agent-completion notifications, quota exhaustion detection, and blob/data downloads.
+ * for agent-completion notifications, quota exhaustion detection, blob/data downloads,
+ * and Smart BiDi/RTL + optional Persian UI chrome support.
  *
  * Prefers WebViewCompat's origin-scoped WebMessageListener (`window.AntigravityBridge`)
  * and falls back to `window.AntigravityAndroid` only on legacy WebView implementations.
  */
 object AntigravityJsBridge {
+
+    const val PREFS_NAME = "antigravity_prefs"
+    const val KEY_BIDI_RTL_ENABLED = "bidi_rtl_enabled"
+    const val KEY_PERSIAN_UI_ENABLED = "persian_ui_enabled"
+    const val DEFAULT_BIDI_RTL_ENABLED = true
+    const val DEFAULT_PERSIAN_UI_ENABLED = false
+    const val VAZIRMATN_ASSET_URL = "https://appassets.androidplatform.net/assets/fonts/Vazirmatn-NL.woff2"
+
+    fun isBidiRtlEnabled(prefs: SharedPreferences): Boolean =
+        prefs.getBoolean(KEY_BIDI_RTL_ENABLED, DEFAULT_BIDI_RTL_ENABLED)
+
+    fun isBidiRtlEnabled(context: Context): Boolean =
+        isBidiRtlEnabled(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE))
+
+    fun setBidiRtlEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_BIDI_RTL_ENABLED, enabled).apply()
+    }
+
+    fun isPersianUiEnabled(prefs: SharedPreferences): Boolean =
+        prefs.getBoolean(KEY_PERSIAN_UI_ENABLED, DEFAULT_PERSIAN_UI_ENABLED)
+
+    fun isPersianUiEnabled(context: Context): Boolean =
+        isPersianUiEnabled(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE))
+
+    fun setPersianUiEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_PERSIAN_UI_ENABLED, enabled).apply()
+    }
 
     val AGENT_BRIDGE_JS: String = """
         (function() {
@@ -62,7 +94,7 @@ object AntigravityJsBridge {
                 for (var i = 0; i < btns.length; i++) {
                     var b = btns[i];
                     var label = ((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('title') || '') + ' ' + (b.textContent || '')).trim().toLowerCase();
-                    if (label === 'stop' || label.indexOf('stop generating') !== -1 || label.indexOf('stop agent') !== -1 || label.indexOf('stop response') !== -1) {
+                    if (label === 'stop' || label === 'توقف' || label.indexOf('stop generating') !== -1 || label.indexOf('stop agent') !== -1 || label.indexOf('stop response') !== -1) {
                         if (b.offsetParent !== null) return true;
                     }
                 }
@@ -311,6 +343,303 @@ object AntigravityJsBridge {
                     };
                     fr.readAsDataURL(b);
                 }).catch(function(){});
+            })();
+        """.trimIndent()
+    }
+
+    /**
+     * Builds the idempotent, live-toggleable JavaScript for Smart BiDi/RTL layout,
+     * offline Vazirmatn font loading, and React-safe Persian UI chrome translation.
+     */
+    fun buildPersianBidiJs(enableBidi: Boolean, enablePersianUi: Boolean): String {
+        val qFontUrl = JSONObject.quote(VAZIRMATN_ASSET_URL)
+        return """
+            (function() {
+                var enableBidi = $enableBidi;
+                var enablePersianUi = $enablePersianUi;
+                window.__agyBidiCfg = { enableBidi: enableBidi, enablePersianUi: enablePersianUi };
+
+                var st = window.__agyBidiState || (window.__agyBidiState = {
+                    origText: new WeakMap(),
+                    origAttr: new WeakMap(),
+                    origDir: new WeakMap(),
+                    observerInstalled: false,
+                    observer: null,
+                    timer: null,
+                    applying: false
+                });
+
+                var STYLE_ID = 'agy-bidi-style';
+                var BIDI_TARGET_SEL = 'p, li, h1, h2, h3, h4, h5, h6, blockquote, textarea, [contenteditable="true"], [class*="prose"], [class*="markdown"], [data-testid*="message"], [class*="message-content"], [class*="message-body"], [class*="chat-message"]';
+                var CODE_LOCK_SEL = 'pre, code, kbd, samp, .monaco-editor, .xterm, [class*="diff-"], [class*="-diff"], [class*="diffEditor"], [class*="DiffEditor"], [class*="bg-diffEditor"], [class*="terminal-"], [class*="-terminal"], .terminal, [data-testid*="terminal"], [data-testid*="diff"]';
+                var CHROME_SKIP_SEL = 'pre, code, kbd, samp, script, style, noscript, svg, .monaco-editor, .xterm, [class*="prose"], [class*="markdown"], [class*="message-content"], [class*="message-body"], [data-testid*="message-content"], [class*="diff-"], [class*="-diff"], [class*="diffEditor"], [class*="DiffEditor"], [class*="bg-diffEditor"], [class*="terminal-"], [class*="-terminal"], .terminal, [data-testid*="terminal"], [data-testid*="diff"]';
+
+                var FA_DICT = {
+                    'Projects': 'پروژه‌ها',
+                    'Customizations': 'سفارشی‌سازی‌ها',
+                    'See all': 'مشاهده همه',
+                    'Ask anything, @ to mention, / for actions': 'هر چیزی بپرسید، @ برای اشاره، / برای دستورات',
+                    'Ask anything, @ to mention': 'هر چیزی بپرسید، @ برای اشاره',
+                    'Ask anything': 'هر چیزی بپرسید',
+                    'Settings': 'تنظیمات',
+                    'Tool permissions': 'مجوزهای ابزار',
+                    'Network access rules': 'قوانین دسترسی شبکه',
+                    'Input Box': 'کادر ورودی',
+                    'Queued messages': 'پیام‌های در صف',
+                    'Queue': 'در صف',
+                    'Send Immediately': 'ارسال فوری',
+                    'Always proceed': 'همیشه ادامه بده',
+                    'Open': 'باز کردن',
+                    'Stop': 'توقف',
+                    'Copy': 'کپی',
+                    'Retry': 'تلاش مجدد',
+                    'New conversation': 'گفت‌وگوی جدید',
+                    'Conversations': 'گفت‌وگوها',
+                    'Artifacts': 'آثار و خروجی‌ها',
+                    'Changes': 'تغییرات',
+                    'Review': 'بررسی',
+                    'Recent': 'اخیر',
+                    'Account': 'حساب کاربری',
+                    'Appearance': 'ظاهر',
+                    'Theme': 'پوسته',
+                    'General': 'عمومی',
+                    'Dark': 'تیره',
+                    'Light': 'روشن',
+                    'System': 'سیستم',
+                    'Sign out': 'خروج از حساب',
+                    'Accept': 'پذیرش',
+                    'Accept all': 'پذیرش همه',
+                    'Approve': 'تایید',
+                    'Allow': 'اجازه دادن',
+                    'Cancel': 'لغو',
+                    'Close': 'بستن',
+                    'Delete': 'حذف',
+                    'Save': 'ذخیره',
+                    'Search': 'جستجو',
+                    'Files': 'فایل‌ها',
+                    'Model': 'مدل'
+                };
+
+                function buildStyleCss(cfg) {
+                    if (!cfg.enableBidi && !cfg.enablePersianUi) return '';
+                    var css = [];
+                    css.push(
+                        '@font-face {' +
+                        ' font-family: "AgyVazirmatn";' +
+                        ' src: url(' + $qFontUrl + ') format("woff2 supports variations"), url(' + $qFontUrl + ') format("woff2");' +
+                        ' font-weight: 100 900;' +
+                        ' font-style: normal;' +
+                        ' font-display: swap;' +
+                        ' unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF;' +
+                        '}'
+                    );
+                    css.push(
+                        'body, .font-sans, p, li, h1, h2, h3, h4, h5, h6, blockquote, textarea, [contenteditable="true"] {' +
+                        ' font-family: "AgyVazirmatn", var(--font-sans, "Google Sans Flex", "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);' +
+                        '}'
+                    );
+                    if (cfg.enableBidi) {
+                        css.push(
+                            'p, li, h1, h2, h3, h4, h5, h6, blockquote, textarea, [contenteditable="true"], [data-agy-bidi="1"]:not(pre):not(code):not(kbd):not(samp) {' +
+                            ' unicode-bidi: plaintext;' +
+                            '}'
+                        );
+                        css.push(
+                            'pre, code, kbd, samp, .monaco-editor, .xterm, ' +
+                            '[class*="diff-"], [class*="-diff"], [class*="diffEditor"], [class*="DiffEditor"], [class*="bg-diffEditor"], ' +
+                            '[class*="terminal-"], [class*="-terminal"], .terminal, [data-testid*="terminal"], [data-testid*="diff"] {' +
+                            ' direction: ltr !important;' +
+                            ' text-align: left !important;' +
+                            ' unicode-bidi: isolate !important;' +
+                            '}'
+                        );
+                    }
+                    return css.join('\n');
+                }
+
+                function syncStyle(cfg) {
+                    var existing = document.getElementById(STYLE_ID);
+                    var css = buildStyleCss(cfg);
+                    if (!css) {
+                        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+                        return;
+                    }
+                    if (!existing) {
+                        existing = document.createElement('style');
+                        existing.id = STYLE_ID;
+                        (document.head || document.documentElement).appendChild(existing);
+                    }
+                    if (existing.textContent !== css) {
+                        existing.textContent = css;
+                    }
+                }
+
+                function applyBidi(cfg, root) {
+                    if (!root) return;
+                    if (cfg.enableBidi) {
+                        var nodes = root.querySelectorAll ? root.querySelectorAll(BIDI_TARGET_SEL) : [];
+                        for (var i = 0; i < nodes.length; i++) {
+                            var el = nodes[i];
+                            if (el.closest && el.closest(CODE_LOCK_SEL)) continue;
+                            if (!st.origDir.has(el)) {
+                                st.origDir.set(el, el.hasAttribute('dir') ? el.getAttribute('dir') : null);
+                            }
+                            if (el.getAttribute('dir') !== 'auto') {
+                                el.setAttribute('dir', 'auto');
+                            }
+                            if (el.getAttribute('data-agy-bidi') !== '1') {
+                                el.setAttribute('data-agy-bidi', '1');
+                            }
+                        }
+                    } else {
+                        var marked = root.querySelectorAll ? root.querySelectorAll('[data-agy-bidi="1"]') : [];
+                        for (var j = 0; j < marked.length; j++) {
+                            var m = marked[j];
+                            if (st.origDir.has(m)) {
+                                var orig = st.origDir.get(m);
+                                if (orig === null) m.removeAttribute('dir');
+                                else m.setAttribute('dir', orig);
+                                st.origDir.delete(m);
+                            } else if (m.getAttribute('dir') === 'auto') {
+                                m.removeAttribute('dir');
+                            }
+                            m.removeAttribute('data-agy-bidi');
+                        }
+                    }
+                }
+
+                function isExcludedChrome(el) {
+                    if (!el || el.nodeType !== 1) return true;
+                    return !!(el.closest && el.closest(CHROME_SKIP_SEL));
+                }
+
+                function translateTextNodes(root, translate) {
+                    if (!root) return;
+                    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+                    var node;
+                    while ((node = walker.nextNode())) {
+                        var parent = node.parentElement;
+                        if (!parent) continue;
+                        if (translate) {
+                            var tag = parent.tagName;
+                            if (tag === 'TEXTAREA' || tag === 'INPUT' || isExcludedChrome(parent)) continue;
+                            if (parent.closest && parent.closest('[contenteditable="true"]')) continue;
+                            var raw = node.nodeValue;
+                            if (!raw) continue;
+                            var trimmed = raw.trim();
+                            if (!trimmed) continue;
+                            var fa = Object.prototype.hasOwnProperty.call(FA_DICT, trimmed) ? FA_DICT[trimmed] : null;
+                            if (!fa) continue;
+                            var startIdx = raw.indexOf(trimmed);
+                            var lead = raw.slice(0, startIdx);
+                            var trail = raw.slice(startIdx + trimmed.length);
+                            var nextVal = lead + fa + trail;
+                            var rec = st.origText.get(node);
+                            if (!rec || raw !== rec.translated) {
+                                st.origText.set(node, { orig: raw, translated: nextVal });
+                            }
+                            if (node.nodeValue !== nextVal) {
+                                node.nodeValue = nextVal;
+                            }
+                        } else {
+                            var saved = st.origText.get(node);
+                            if (saved) {
+                                if (node.nodeValue === saved.translated) {
+                                    node.nodeValue = saved.orig;
+                                }
+                                st.origText.delete(node);
+                            }
+                        }
+                    }
+                }
+
+                function translateAttributes(root, translate) {
+                    if (!root || !root.querySelectorAll) return;
+                    var attrs = ['placeholder', 'aria-label', 'title'];
+                    var els = root.querySelectorAll('[placeholder], [aria-label], [title]');
+                    for (var i = 0; i < els.length; i++) {
+                        var el = els[i];
+                        if (translate) {
+                            if (isExcludedChrome(el)) continue;
+                            for (var a = 0; a < attrs.length; a++) {
+                                var attr = attrs[a];
+                                var val = el.getAttribute(attr);
+                                if (!val) continue;
+                                var trimmed = val.trim();
+                                var fa = Object.prototype.hasOwnProperty.call(FA_DICT, trimmed) ? FA_DICT[trimmed] : null;
+                                if (!fa) continue;
+                                var map = st.origAttr.get(el) || {};
+                                var prev = map[attr];
+                                if (!prev || val !== prev.translated) {
+                                    map[attr] = { orig: val, translated: fa };
+                                    st.origAttr.set(el, map);
+                                }
+                                if (val !== fa) {
+                                    el.setAttribute(attr, fa);
+                                }
+                            }
+                        } else {
+                            var savedMap = st.origAttr.get(el);
+                            if (savedMap) {
+                                for (var k = 0; k < attrs.length; k++) {
+                                    var key = attrs[k];
+                                    if (savedMap[key] && el.getAttribute(key) === savedMap[key].translated) {
+                                        el.setAttribute(key, savedMap[key].orig);
+                                    }
+                                }
+                                st.origAttr.delete(el);
+                            }
+                        }
+                    }
+                }
+
+                function applyAll() {
+                    var cfg = window.__agyBidiCfg || { enableBidi: true, enablePersianUi: false };
+                    if (st.applying) return;
+                    st.applying = true;
+                    try {
+                        syncStyle(cfg);
+                        if (document.body) {
+                            applyBidi(cfg, document.body);
+                            translateTextNodes(document.body, !!cfg.enablePersianUi);
+                            translateAttributes(document.body, !!cfg.enablePersianUi);
+                        }
+                    } catch (e) {} finally {
+                        if (st.observer && typeof st.observer.takeRecords === 'function') {
+                            try { st.observer.takeRecords(); } catch (e) {}
+                        }
+                        st.applying = false;
+                    }
+                }
+
+                function scheduleApply() {
+                    if (st.applying) return;
+                    if (st.timer) clearTimeout(st.timer);
+                    st.timer = setTimeout(function() {
+                        st.timer = null;
+                        applyAll();
+                    }, 80);
+                }
+
+                function ensureObserver() {
+                    if (st.observerInstalled) return;
+                    if (!document.body) {
+                        setTimeout(ensureObserver, 150);
+                        return;
+                    }
+                    st.observerInstalled = true;
+                    st.observer = new MutationObserver(scheduleApply);
+                    st.observer.observe(document.body, {
+                        childList: true,
+                        subtree: true,
+                        characterData: true,
+                        attributes: true,
+                        attributeFilter: ['placeholder', 'aria-label', 'title']
+                    });
+                }
+
+                applyAll();
+                ensureObserver();
             })();
         """.trimIndent()
     }

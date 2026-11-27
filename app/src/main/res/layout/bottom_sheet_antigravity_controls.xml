@@ -22,7 +22,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Antigravity Control Center"
+            android:text="@string/agy_control_center_title"
             android:textColor="@color/agy_text_primary"
             android:textSize="17sp"
             android:textStyle="bold" />
@@ -54,7 +54,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="10dp"
                     android:layout_weight="1"
-                    android:text="Embedded Engine: Checking..."
+                    android:text="@string/agy_status_engine_checking"
                     android:textColor="@color/agy_text_primary"
                     android:textSize="13sp" />
             </LinearLayout>
@@ -78,7 +78,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="10dp"
                     android:layout_weight="1"
-                    android:text="Antigravity Hub (4400): Checking..."
+                    android:text="@string/agy_status_hub_checking"
                     android:textColor="@color/agy_text_primary"
                     android:textSize="13sp" />
             </LinearLayout>
@@ -101,7 +101,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="10dp"
                     android:layout_weight="1"
-                    android:text="Data Saver: AGY_CLI_DISABLE_AUTO_UPDATE=1"
+                    android:text="@string/agy_status_data_saver"
                     android:textColor="@color/agy_text_primary"
                     android:textSize="13sp" />
             </LinearLayout>
@@ -112,7 +112,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="Accounts &amp; Quota Failover"
+            android:text="@string/agy_section_accounts"
             android:textColor="@color/agy_text_secondary"
             android:textSize="12sp"
             android:textStyle="bold" />
@@ -138,7 +138,7 @@
                     android:layout_weight="1"
                     android:ellipsize="end"
                     android:maxLines="1"
-                    android:text="Active: Checking..."
+                    android:text="@string/agy_active_account_checking"
                     android:textColor="@color/agy_text_primary"
                     android:textSize="13sp"
                     android:textStyle="bold" />
@@ -151,7 +151,7 @@
                     android:background="@drawable/agy_btn_primary"
                     android:gravity="center"
                     android:paddingHorizontal="12dp"
-                    android:text="+ Add Account"
+                    android:text="@string/agy_btn_add_account"
                     android:textColor="#FFFFFF"
                     android:textSize="12sp"
                     android:textStyle="bold" />
@@ -170,7 +170,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
                 android:checked="true"
-                android:text="Auto-switch account when quota drains"
+                android:text="@string/agy_switch_auto_quota"
                 android:textColor="@color/agy_text_primary"
                 android:textSize="13sp" />
 
@@ -180,7 +180,45 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:checked="false"
-                android:text="Region eligibility bypass (experimental)"
+                android:text="@string/agy_switch_region_bypass"
+                android:textColor="@color/agy_text_primary"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <!-- Language & BiDi / فارسی -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/agy_section_language_bidi"
+            android:textColor="@color/agy_text_secondary"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/agy_card_bg"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <Switch
+                android:id="@+id/switch_bidi_rtl"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:text="@string/agy_switch_smart_bidi"
+                android:textColor="@color/agy_text_primary"
+                android:textSize="13sp" />
+
+            <Switch
+                android:id="@+id/switch_persian_ui"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:checked="false"
+                android:text="@string/agy_switch_persian_ui"
                 android:textColor="@color/agy_text_primary"
                 android:textSize="13sp" />
         </LinearLayout>
@@ -190,7 +228,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="Quick Actions"
+            android:text="@string/agy_section_quick_actions"
             android:textColor="@color/agy_text_secondary"
             android:textSize="12sp"
             android:textStyle="bold" />
@@ -208,7 +246,7 @@
                 android:layout_weight="1"
                 android:background="@drawable/agy_btn_secondary"
                 android:gravity="center"
-                android:text="Reload UI"
+                android:text="@string/agy_btn_reload_ui"
                 android:textColor="@color/agy_text_primary"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -221,7 +259,7 @@
                 android:layout_weight="1"
                 android:background="@drawable/agy_btn_secondary"
                 android:gravity="center"
-                android:text="Restart Hub"
+                android:text="@string/agy_btn_restart_hub"
                 android:textColor="@color/agy_text_primary"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -240,7 +278,7 @@
                 android:layout_weight="1"
                 android:background="@drawable/agy_btn_secondary"
                 android:gravity="center"
-                android:text="Built-in Terminal"
+                android:text="@string/agy_btn_builtin_terminal"
                 android:textColor="@color/agy_text_primary"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -253,7 +291,7 @@
                 android:layout_weight="1"
                 android:background="@drawable/agy_btn_secondary"
                 android:gravity="center"
-                android:text="View Hub Logs"
+                android:text="@string/agy_btn_view_logs"
                 android:textColor="@color/agy_text_primary"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -272,7 +310,7 @@
                 android:layout_weight="1"
                 android:background="@drawable/agy_btn_secondary"
                 android:gravity="center"
-                android:text="Clear Cache"
+                android:text="@string/agy_btn_clear_cache"
                 android:textColor="@color/agy_text_secondary"
                 android:textSize="12sp"
                 android:textStyle="bold" />
@@ -285,7 +323,7 @@
                 android:layout_weight="1"
                 android:background="@drawable/agy_btn_secondary"
                 android:gravity="center"
-                android:text="Check Updates"
+                android:text="@string/agy_btn_check_updates"
                 android:textColor="@color/agy_accent"
                 android:textSize="12sp"
                 android:textStyle="bold" />
@@ -298,7 +336,7 @@
             android:layout_marginTop="8dp"
             android:background="@drawable/agy_btn_secondary"
             android:gravity="center"
-            android:text="Reinstall / Update Antigravity CLI"
+            android:text="@string/agy_btn_reinstall_cli"
             android:textColor="@color/agy_text_secondary"
             android:textSize="12sp"
             android:textStyle="bold" />
@@ -308,7 +346,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="Power &amp; Agent Alerts"
+            android:text="@string/agy_section_power_alerts"
             android:textColor="@color/agy_text_secondary"
             android:textSize="12sp"
             android:textStyle="bold" />
@@ -326,7 +364,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:checked="false"
-                android:text="Keep screen awake while open"
+                android:text="@string/agy_switch_keep_screen_on"
                 android:textColor="@color/agy_text_primary"
                 android:textSize="13sp" />
 
@@ -336,7 +374,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:checked="false"
-                android:text="Hold background CPU Wake Lock"
+                android:text="@string/agy_switch_cpu_wakelock"
                 android:textColor="@color/agy_text_primary"
                 android:textSize="13sp" />
 
@@ -346,7 +384,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:checked="true"
-                android:text="Notify when agent finishes a job"
+                android:text="@string/agy_switch_notify_done"
                 android:textColor="@color/agy_text_primary"
                 android:textSize="13sp" />
 
@@ -356,7 +394,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:checked="false"
-                android:text="Also notify while app is open"
+                android:text="@string/agy_switch_notify_foreground"
                 android:textColor="@color/agy_text_secondary"
                 android:textSize="12sp" />
 
@@ -373,7 +411,7 @@
                     android:layout_weight="1"
                     android:background="@drawable/agy_btn_secondary"
                     android:gravity="center"
-                    android:text="Test Alert"
+                    android:text="@string/agy_btn_test_alert"
                     android:textColor="@color/agy_text_primary"
                     android:textSize="12sp"
                     android:textStyle="bold" />
@@ -386,7 +424,7 @@
                     android:layout_weight="1"
                     android:background="@drawable/agy_btn_secondary"
                     android:gravity="center"
-                    android:text="Android 12+ Fix"
+                    android:text="@string/agy_btn_android12_fix"
                     android:textColor="@color/agy_text_secondary"
                     android:textSize="12sp"
                     android:textStyle="bold" />
@@ -398,7 +436,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="Offline Backup &amp; Restore (.tar.zst)"
+            android:text="@string/agy_section_backup"
             android:textColor="@color/agy_text_secondary"
             android:textSize="12sp"
             android:textStyle="bold" />
@@ -423,7 +461,7 @@
                     android:layout_weight="1"
                     android:background="@drawable/agy_btn_secondary"
                     android:gravity="center"
-                    android:text="Full Backup"
+                    android:text="@string/agy_btn_backup_full"
                     android:textColor="@color/agy_text_primary"
                     android:textSize="13sp"
                     android:textStyle="bold" />
@@ -436,7 +474,7 @@
                     android:layout_weight="1"
                     android:background="@drawable/agy_btn_secondary"
                     android:gravity="center"
-                    android:text="Packages-Only"
+                    android:text="@string/agy_btn_backup_packages"
                     android:textColor="@color/agy_text_primary"
                     android:textSize="13sp"
                     android:textStyle="bold" />
@@ -449,7 +487,7 @@
                 android:layout_marginTop="8dp"
                 android:background="@drawable/agy_btn_primary"
                 android:gravity="center"
-                android:text="Restore Backup (.tar.zst)"
+                android:text="@string/agy_btn_restore_backup"
                 android:textColor="#FFFFFF"
                 android:textSize="13sp"
                 android:textStyle="bold" />

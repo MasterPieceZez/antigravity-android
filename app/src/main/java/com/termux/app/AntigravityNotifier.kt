@@ -30,10 +30,10 @@ object AntigravityNotifier {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 NOTIF_CHANNEL_ID,
-                "Antigravity Agent Alerts",
+                context.getString(R.string.agy_notif_channel_name),
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Alerts when an Antigravity agent finishes a task"
+                description = context.getString(R.string.agy_notif_channel_desc)
                 enableVibration(true)
             }
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
@@ -81,12 +81,14 @@ object AntigravityNotifier {
         }
         val pendingIntent = PendingIntent.getActivity(context, 0, intent, piFlags)
 
+        val resolvedTitle = title.ifBlank { context.getString(R.string.antigravity_app_name) }
+        val resolvedBody = body.ifBlank { context.getString(R.string.agy_notif_default_body) }
         val notif = NotificationCompat.Builder(context, NOTIF_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_antigravity_notif)
             .setColor(Color.parseColor("#3B82F6"))
-            .setContentTitle(title.ifBlank { "Antigravity" })
-            .setContentText(body.ifBlank { "Agent task finished" })
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body.ifBlank { "Agent task finished" }))
+            .setContentTitle(resolvedTitle)
+            .setContentText(resolvedBody)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(resolvedBody))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setGroup(NOTIF_GROUP_KEY)
             .setAutoCancel(true)
@@ -112,8 +114,8 @@ object AntigravityNotifier {
         val notif = NotificationCompat.Builder(context, NOTIF_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_antigravity_notif)
             .setColor(Color.parseColor("#3B82F6"))
-            .setContentTitle("Antigravity Sign-In")
-            .setContentText("Tap to open browser and complete authentication")
+            .setContentTitle(context.getString(R.string.agy_notif_signin_title))
+            .setContentText(context.getString(R.string.agy_notif_signin_body))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)

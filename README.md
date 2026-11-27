@@ -20,6 +20,7 @@ An unofficial standalone Android app for Google Antigravity (`agy`). It bundles 
 - Supports multi-account credential snapshots encrypted with Android Keystore and automatic quota-exhaustion failover between accounts.
 - Includes a native in-app APK updater (`InAppUpdater`) that downloads releases directly from GitHub, verifies `SHA256SUMS.txt`, and launches the Android package installer.
 - Includes an opt-in experimental region eligibility bypass in Control Center gated behind an explicit disclaimer dialog.
+- Features a **Smart BiDi/RTL engine** (default ON) with an offline **Vazirmatn** font scoped to Persian/Arabic Unicode ranges, strict LTR locking for code blocks/diffs/terminals, native Persian (`fa`) Android localization, and an opt-in **Persian UI (فارسی)** toggle in Control Center for React-safe Hub chrome translation.
 - Supports microphone input in the WebView for speech-to-text, plus Android notifications when background agent tasks finish.
 - Includes a built-in terminal (openable from the floating control pill) with extra keys (`ESC`, `TAB`, sticky `CTRL`/`ALT`, arrows, symbols) and font zoom controls.
 - Lets you share files into Antigravity via Android's Share sheet (`~/inbox` or `Download/AntigravityInbox`).
