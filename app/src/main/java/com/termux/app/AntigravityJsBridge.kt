@@ -2,7 +2,6 @@ package com.termux.app
 
 import android.content.Context
 import android.content.SharedPreferences
-import org.json.JSONObject
 
 /**
  * JavaScript snippets injected into the trusted Antigravity Hub WebView
@@ -314,9 +313,30 @@ object AntigravityJsBridge {
         })();
     """.trimIndent()
 
+    private fun quoteJsString(value: String): String = buildString(value.length + 2) {
+        append('"')
+        for (ch in value) {
+            when (ch) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                '\b' -> append("\\b")
+                '\u000C' -> append("\\f")
+                '<' -> append("\\u003C")
+                '>' -> append("\\u003E")
+                '\u2028' -> append("\\u2028")
+                '\u2029' -> append("\\u2029")
+                else -> append(ch)
+            }
+        }
+        append('"')
+    }
+
     fun buildBlobDownloadJs(url: String, guessedName: String): String {
-        val qUrl = JSONObject.quote(url)
-        val qName = JSONObject.quote(guessedName)
+        val qUrl = quoteJsString(url)
+        val qName = quoteJsString(guessedName)
         return """
             (function() {
                 fetch($qUrl).then(function(r){ return r.blob(); }).then(function(b){
@@ -352,7 +372,7 @@ object AntigravityJsBridge {
      * offline Vazirmatn font loading, and React-safe Persian UI chrome translation.
      */
     fun buildPersianBidiJs(enableBidi: Boolean, enablePersianUi: Boolean): String {
-        val qFontUrl = JSONObject.quote(VAZIRMATN_ASSET_URL)
+        val qFontUrl = quoteJsString(VAZIRMATN_ASSET_URL)
         return """
             (function() {
                 var enableBidi = $enableBidi;
