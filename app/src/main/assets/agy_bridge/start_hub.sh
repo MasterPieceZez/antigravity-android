@@ -56,15 +56,64 @@ is_lock_stale() {
     return 1
 }
 
-is_hub_running() {
+is_pid_alive() {
+    local p="$1"
+    [ -n "$p" ] && [ "$p" != "$$" ] || return 1
+    kill -0 "$p" 2>/dev/null || return 1
+    if [ -r "/proc/$p/stat" ]; then
+        local st
+        st=$(awk '{print $3}' "/proc/$p/stat" 2>/dev/null || true)
+        [ "$st" = "Z" ] && return 1
+    fi
+    return 0
+}
+
+find_hub_pids() {
+    local p
     if command -v pgrep >/dev/null 2>&1; then
-        if pgrep -f "agy.*--hub" >/dev/null 2>&1 || pgrep -f "hub-port=4400" >/dev/null 2>&1; then
-            return 0
-        fi
+        for p in $(pgrep -f "agy.*--hub" 2>/dev/null || true) $(pgrep -f "hub-port=4400" 2>/dev/null || true); do
+            if is_pid_alive "$p"; then
+                printf "%s\n" "$p"
+            fi
+        done | sort -u
+    fi
+}
+
+stop_existing_hub() {
+    local pids p
+    pids=$(find_hub_pids)
+    local hub_pid
+    hub_pid=$(cat "$BRIDGE_DIR/hub.pid" 2>/dev/null || true)
+    if [ -n "$hub_pid" ] && is_pid_alive "$hub_pid"; then
+        pids=$(printf "%s\n%s\n" "$pids" "$hub_pid" | sort -u)
+    fi
+    if [ -n "$pids" ]; then
+        for p in $pids; do
+            kill -TERM "$p" 2>/dev/null || true
+        done
+        local i=0
+        while [ "$i" -lt 10 ]; do
+            if [ -z "$(find_hub_pids)" ]; then
+                break
+            fi
+            sleep 0.1
+            i=$((i + 1))
+        done
+        for p in $(find_hub_pids); do
+            kill -KILL "$p" 2>/dev/null || true
+        done
+        sleep 0.1
+    fi
+    rm -f "$BRIDGE_DIR/hub.pid" 2>/dev/null || true
+}
+
+is_hub_running() {
+    if [ -n "$(find_hub_pids)" ]; then
+        return 0
     fi
     local hub_pid
     hub_pid=$(cat "$BRIDGE_DIR/hub.pid" 2>/dev/null || true)
-    if [ -n "$hub_pid" ] && kill -0 "$hub_pid" 2>/dev/null; then
+    if is_pid_alive "$hub_pid"; then
         if [ -r "/proc/$hub_pid/cmdline" ]; then
             if tr '\0' ' ' < "/proc/$hub_pid/cmdline" 2>/dev/null | grep -q -- "--hub"; then
                 return 0
@@ -99,6 +148,10 @@ if [ -f "$AGY_BIN" ]; then
     else
         printf '[start_hub] Lock busy (%s); skipping launch\n' "$LOCK_DIR" >> "$AGY_LOG" 2>/dev/null || true
         exit 0
+    fi
+
+    if [ "${AGY_FORCE_RESTART:-0}" = "1" ]; then
+        stop_existing_hub
     fi
 
     if ! is_hub_running; then

@@ -487,7 +487,11 @@ object AntigravityEngine {
         }
     }
 
-    suspend fun startHubAndBridge(context: Context, forceProvision: Boolean = false) = withContext(Dispatchers.IO) {
+    suspend fun startHubAndBridge(
+        context: Context,
+        forceProvision: Boolean = false,
+        forceRestart: Boolean = false
+    ) = withContext(Dispatchers.IO) {
         if (!isBootstrapReady()) return@withContext
         hubTransitionCount.incrementAndGet()
         try {
@@ -498,6 +502,9 @@ object AntigravityEngine {
                 val pb = ProcessBuilder(BASH_BIN, "$BRIDGE_DIR/start_hub.sh")
                 pb.directory(File(HOME_DIR))
                 pb.environment().putAll(buildTermuxEnv())
+                if (forceRestart) {
+                    pb.environment()["AGY_FORCE_RESTART"] = "1"
+                }
                 pb.redirectErrorStream(true)
                 runCatching {
                     val proc = pb.start()
@@ -648,10 +655,10 @@ object AntigravityEngine {
         hubTransitionCount.incrementAndGet()
         try {
             restartMutex.withLock {
-                if (!skipStop || isPortOpen(HUB_PORT, 50)) {
+                if (!skipStop || isPortOpen(HUB_PORT, 50) || isHubProcessAlive()) {
                     stopBackgroundProcessesSuspend()
                 }
-                if (isPortOpen(HUB_PORT, 50)) {
+                if (isPortOpen(HUB_PORT, 50) || isHubProcessAlive()) {
                     delay(200L)
                 }
                 runCatching { File(HUB_URL_FILE).delete() }
@@ -660,7 +667,7 @@ object AntigravityEngine {
                     parentFile?.mkdirs()
                     writeText("")
                 }
-                startHubAndBridge(context, forceProvision = false)
+                startHubAndBridge(context, forceProvision = false, forceRestart = true)
                 pollForHubUrl(35000L, onExternalUrl = onExternalUrl)
             }
         } finally {
@@ -865,8 +872,10 @@ object AntigravityEngine {
         return recordedPid to pkill
     }
 
+    private fun isHubProcessAlive(): Boolean = findMatchingHubPidsInProc().isNotEmpty()
+
     private fun forceKillHubIfListening(recordedPid: Int?, pkill: File) {
-        if (isPortOpen(HUB_PORT, 100)) {
+        if (isPortOpen(HUB_PORT, 100) || isHubProcessAlive()) {
             if (recordedPid != null && isPidAntigravityHub(recordedPid)) {
                 runCatching { Os.kill(-recordedPid, 9) } // SIGKILL process group
                 runCatching { Os.kill(recordedPid, 9) } // SIGKILL
@@ -892,12 +901,12 @@ object AntigravityEngine {
     suspend fun stopBackgroundProcessesSuspend() = withContext(Dispatchers.IO) {
         val (recordedPid, pkill) = sendInitialStopSignals()
         val deadline = System.currentTimeMillis() + 900L
-        while (System.currentTimeMillis() < deadline && isPortOpen(HUB_PORT, 50)) {
+        while (System.currentTimeMillis() < deadline && (isPortOpen(HUB_PORT, 50) || isHubProcessAlive())) {
             delay(50L)
         }
         forceKillHubIfListening(recordedPid, pkill)
         val killDeadline = System.currentTimeMillis() + 800L
-        while (System.currentTimeMillis() < killDeadline && isPortOpen(HUB_PORT, 50)) {
+        while (System.currentTimeMillis() < killDeadline && (isPortOpen(HUB_PORT, 50) || isHubProcessAlive())) {
             delay(50L)
         }
         cachedHubListening = false
@@ -907,12 +916,12 @@ object AntigravityEngine {
     fun stopBackgroundProcesses() {
         val (recordedPid, pkill) = sendInitialStopSignals()
         val deadline = System.currentTimeMillis() + 2500L
-        while (System.currentTimeMillis() < deadline && isPortOpen(HUB_PORT, 100)) {
+        while (System.currentTimeMillis() < deadline && (isPortOpen(HUB_PORT, 100) || isHubProcessAlive())) {
             Thread.sleep(100)
         }
         forceKillHubIfListening(recordedPid, pkill)
         val killDeadline = System.currentTimeMillis() + 1000L
-        while (System.currentTimeMillis() < killDeadline && isPortOpen(HUB_PORT, 100)) {
+        while (System.currentTimeMillis() < killDeadline && (isPortOpen(HUB_PORT, 100) || isHubProcessAlive())) {
             Thread.sleep(100)
         }
         cachedHubListening = false
