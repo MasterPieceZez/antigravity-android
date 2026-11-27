@@ -58,7 +58,7 @@ is_lock_stale() {
 
 is_hub_running() {
     if command -v pgrep >/dev/null 2>&1; then
-        if pgrep -f "[/]agy --hub" >/dev/null 2>&1; then
+        if pgrep -f "agy.*--hub" >/dev/null 2>&1 || pgrep -f "hub-port=4400" >/dev/null 2>&1; then
             return 0
         fi
     fi
@@ -119,6 +119,8 @@ if [ -f "$AGY_BIN" ]; then
         HUB_PID=$!
         printf '%s\n' "$HUB_PID" > "$BRIDGE_DIR/hub.pid" 2>/dev/null || true
         printf '[start_hub] Started PID %s\n' "$HUB_PID" >> "$AGY_LOG" 2>/dev/null || true
+    else
+        printf '[start_hub] Hub already running; skipping duplicate launch\n' >> "$AGY_LOG" 2>/dev/null || true
     fi
 else
     printf '[start_hub] Binary not found: %s\n' "$AGY_BIN" >> "$AGY_LOG" 2>/dev/null || true

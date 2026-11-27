@@ -70,6 +70,8 @@ object AntigravityEngine {
     private val installInProgress = AtomicBoolean(false)
     private val activeInstallProcess = AtomicReference<Process?>(null)
     private val hubTransitionCount = AtomicInteger(0)
+    @Volatile
+    private var assetsProvisioned = false
     private const val MIN_INSTALL_FREE_BYTES = 150L * 1024L * 1024L
     @Volatile
     private var cachedBridgeToken: String? = null
@@ -255,6 +257,7 @@ object AntigravityEngine {
                     }
                 }
             }
+            assetsProvisioned = true
         }
     }
 
@@ -482,12 +485,14 @@ object AntigravityEngine {
         }
     }
 
-    suspend fun startHubAndBridge(context: Context) = withContext(Dispatchers.IO) {
+    suspend fun startHubAndBridge(context: Context, forceProvision: Boolean = false) = withContext(Dispatchers.IO) {
         if (!isBootstrapReady()) return@withContext
         hubTransitionCount.incrementAndGet()
         try {
             startMutex.withLock {
-                provisionBridgeAssets(context)
+                if (forceProvision || !assetsProvisioned || !File("$BRIDGE_DIR/start_hub.sh").isFile) {
+                    provisionBridgeAssets(context)
+                }
                 val pb = ProcessBuilder(BASH_BIN, "$BRIDGE_DIR/start_hub.sh")
                 pb.directory(File(HOME_DIR))
                 pb.environment().putAll(buildTermuxEnv())
@@ -635,20 +640,25 @@ object AntigravityEngine {
 
     suspend fun restartHub(
         context: Context,
+        skipStop: Boolean = false,
         onExternalUrl: ((String) -> Unit)? = null
     ): String? = withContext(Dispatchers.IO) {
         hubTransitionCount.incrementAndGet()
         try {
             restartMutex.withLock {
-                stopBackgroundProcessesSuspend()
-                delay(450L)
+                if (!skipStop || isPortOpen(HUB_PORT, 50)) {
+                    stopBackgroundProcessesSuspend()
+                }
+                if (isPortOpen(HUB_PORT, 50)) {
+                    delay(200L)
+                }
                 runCatching { File(HUB_URL_FILE).delete() }
                 runCatching { File(PENDING_OPEN_URL_FILE).delete() }
                 File(AGY_LOG).apply {
                     parentFile?.mkdirs()
                     writeText("")
                 }
-                startHubAndBridge(context)
+                startHubAndBridge(context, forceProvision = false)
                 pollForHubUrl(25000L, onExternalUrl = onExternalUrl)
             }
         } finally {
@@ -755,9 +765,15 @@ object AntigravityEngine {
         if (pid <= 1 || pid == selfPid) return false
         val cmdline = runCatching {
             File("/proc/$pid/cmdline").readBytes().toString(Charsets.UTF_8).replace('\u0000', ' ')
-        }.getOrNull() ?: return false
-        return (cmdline.contains("/agy ") && cmdline.contains("--hub")) ||
-            cmdline.contains("bridge_server.py")
+        }.getOrNull().orEmpty()
+        val exeTarget = runCatching { Os.readlink("/proc/$pid/exe") }.getOrNull().orEmpty()
+        if (cmdline.contains("bridge_server.py")) return true
+        if ((cmdline.contains("--hub") || cmdline.contains("hub-port=4400")) &&
+            (cmdline.contains("agy") || exeTarget.endsWith("/agy") || exeTarget.contains("/.local/"))
+        ) {
+            return true
+        }
+        return exeTarget == AGY_BIN
     }
 
     private fun findMatchingHubPidsInProc(): List<Int> {
@@ -790,7 +806,7 @@ object AntigravityEngine {
         val pkill = File("$PREFIX_DIR/bin/pkill")
         val env = buildTermuxEnv()
         if (pkill.isFile) {
-            for (pattern in listOf("[/]agy --hub", "bridge_server.py")) {
+            for (pattern in listOf("agy.*--hub", "hub-port=4400", "bridge_server.py")) {
                 runCatching {
                     val pb = ProcessBuilder(pkill.absolutePath, "-f", pattern)
                     pb.environment().putAll(env)
@@ -813,10 +829,12 @@ object AntigravityEngine {
             }
             if (pkill.isFile) {
                 val env = buildTermuxEnv()
-                runCatching {
-                    val pb = ProcessBuilder(pkill.absolutePath, "-9", "-f", "[/]agy --hub")
-                    pb.environment().putAll(env)
-                    pb.start().waitFor()
+                for (pattern in listOf("agy.*--hub", "hub-port=4400")) {
+                    runCatching {
+                        val pb = ProcessBuilder(pkill.absolutePath, "-9", "-f", pattern)
+                        pb.environment().putAll(env)
+                        pb.start().waitFor()
+                    }
                 }
             }
         }
@@ -825,14 +843,14 @@ object AntigravityEngine {
 
     suspend fun stopBackgroundProcessesSuspend() = withContext(Dispatchers.IO) {
         val (recordedPid, pkill) = sendInitialStopSignals()
-        val deadline = System.currentTimeMillis() + 2500L
-        while (System.currentTimeMillis() < deadline && isPortOpen(HUB_PORT, 100)) {
-            delay(100L)
+        val deadline = System.currentTimeMillis() + 900L
+        while (System.currentTimeMillis() < deadline && isPortOpen(HUB_PORT, 50)) {
+            delay(50L)
         }
         forceKillHubIfListening(recordedPid, pkill)
-        val killDeadline = System.currentTimeMillis() + 1000L
-        while (System.currentTimeMillis() < killDeadline && isPortOpen(HUB_PORT, 100)) {
-            delay(100L)
+        val killDeadline = System.currentTimeMillis() + 800L
+        while (System.currentTimeMillis() < killDeadline && isPortOpen(HUB_PORT, 50)) {
+            delay(50L)
         }
         cachedHubListening = false
     }

@@ -1289,6 +1289,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         lifecycleScope.launch {
             try {
+                // Stop Hub before swapping credentials so it cannot overwrite the target OAuth files on exit
+                AntigravityEngine.stopBackgroundProcessesSuspend()
                 val switched = if (alreadySwitched) {
                     target
                 } else {
@@ -1301,7 +1303,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     Toast.makeText(this@AntigravityMainActivity, "Failed to load credentials for ${target.email}", Toast.LENGTH_LONG).show()
                     return@launch
                 }
-                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity) { oauthUrl ->
+                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity, skipStop = true) { oauthUrl ->
                     openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
                 }
                 if (newUrl != null) {
@@ -1351,7 +1353,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                         }
                     }
                 }
-                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity) { oauthUrl ->
+                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity, skipStop = true) { oauthUrl ->
                     openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
                 }
                 if (isFinishing || isDestroyed) return@launch
