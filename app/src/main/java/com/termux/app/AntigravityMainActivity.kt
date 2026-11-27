@@ -1041,7 +1041,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             if (AntigravityEngine.isAgyInstalled()) {
                 bootAntigravityHub()
             }
-        } else if (bootstrapComplete && webView.visibility == View.VISIBLE && !BackupRestoreEngine.isBusy() && !isHubReconnectInFlight && !isBootInFlight) {
+        } else if (bootstrapComplete && webView.visibility == View.VISIBLE && !BackupRestoreEngine.isBusy() && !isHubReconnectInFlight && !isBootInFlight && !isSwitchingAccount) {
             isHubReconnectInFlight = true
             lifecycleScope.launch {
                 try {
@@ -1171,7 +1171,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         setupContainer.visibility = View.GONE
         splashContainer.visibility = View.VISIBLE
         splashActions.visibility = View.GONE
-        splashStatus.text = "Starting Antigravity Hub (port 4400)..."
+        splashStatus.text = "Starting Antigravity Hub..."
 
         lifecycleScope.launch {
             try {
@@ -1193,7 +1193,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                         showTerminalView()
                     }
                 } else {
-                    splashStatus.text = "Antigravity Hub did not respond on port 4400.\nCheck logs, retry, or open the terminal."
+                    splashStatus.text = "Antigravity Hub did not start in time.\nCheck logs, retry, or open the terminal."
                     splashActions.visibility = View.VISIBLE
                     floatingPill.visibility = View.VISIBLE
                     pillController.restorePositionIfNeeded()

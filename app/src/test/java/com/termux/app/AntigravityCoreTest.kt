@@ -330,4 +330,12 @@ class AntigravityCoreTest {
             tempHome.deleteRecursively()
         }
     }
+
+    @Test
+    fun engine_detectsNetworkErrorsDuringInstall() {
+        assertTrue(AntigravityEngine.isNetworkErrorOutput("curl: (6) Could not resolve host: antigravity.google"))
+        assertTrue(AntigravityEngine.isNetworkErrorOutput("E: Failed to fetch https://packages.termux.dev/... Temporary failure in name resolution"))
+        assertTrue(AntigravityEngine.isNetworkErrorOutput("curl: (28) Connection timed out after 15000 milliseconds"))
+        assertFalse(AntigravityEngine.isNetworkErrorOutput("Installing antigravity CLI v1.2.3..."))
+    }
 }

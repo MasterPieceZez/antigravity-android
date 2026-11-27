@@ -1,6 +1,8 @@
 package com.termux.app
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.StatFs
 import android.system.Os
@@ -273,7 +275,7 @@ object AntigravityEngine {
     }
 
 
-    fun isHubHttpReady(timeoutMs: Int = 350): Boolean {
+    fun isHubHttpReady(timeoutMs: Int = 1000): Boolean {
         return try {
             val conn = URL("http://127.0.0.1:$HUB_PORT/").openConnection() as HttpURLConnection
             conn.connectTimeout = timeoutMs
@@ -659,13 +661,47 @@ object AntigravityEngine {
                     writeText("")
                 }
                 startHubAndBridge(context, forceProvision = false)
-                pollForHubUrl(25000L, onExternalUrl = onExternalUrl)
+                pollForHubUrl(35000L, onExternalUrl = onExternalUrl)
             }
         } finally {
             hubTransitionCount.decrementAndGet()
         }
     }
 
+
+    fun hasInternetConnection(context: Context): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val net = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(net) ?: return false
+            return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
+        @Suppress("DEPRECATION")
+        return cm.activeNetworkInfo?.isConnected == true
+    }
+
+    fun isNetworkErrorOutput(output: String?): Boolean {
+        if (output.isNullOrBlank()) return false
+        val lower = output.lowercase()
+        return lower.contains("could not resolve host") ||
+            lower.contains("temporary failure in name resolution") ||
+            lower.contains("name or service not known") ||
+            lower.contains("failed to connect") ||
+            lower.contains("network is unreachable") ||
+            lower.contains("no route to host") ||
+            lower.contains("connection timed out") ||
+            lower.contains("operation timed out") ||
+            lower.contains("connection reset by peer") ||
+            lower.contains("ssl connect error") ||
+            lower.contains("curl: (6)") ||
+            lower.contains("curl: (7)") ||
+            lower.contains("curl: (28)") ||
+            lower.contains("curl: (35)") ||
+            lower.contains("curl: (56)") ||
+            lower.contains("could not fetch") ||
+            lower.contains("unable to fetch some archives") ||
+            lower.contains("failed to fetch")
+    }
 
     suspend fun installAntigravityCli(
         context: Context,
@@ -682,6 +718,11 @@ object AntigravityEngine {
                 val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"
                 return@withContext Result.failure(
                     IllegalStateException("Unsupported device ABI ($abi). Google Antigravity CLI requires a 64-bit arm64-v8a or x86_64 Android device.")
+                )
+            }
+            if (!hasInternetConnection(context)) {
+                return@withContext Result.failure(
+                    IllegalStateException("No internet connection. Please connect to Wi-Fi or mobile data and try again.")
                 )
             }
             val availBytes = runCatching { StatFs(FILES_DIR).availableBytes }.getOrDefault(Long.MAX_VALUE)
@@ -746,9 +787,16 @@ object AntigravityEngine {
                 onStatus(100, "Antigravity CLI installed!")
                 Result.success(Unit)
             } else {
-                val tailErr = recentLines.takeLast(4).joinToString(" | ").take(240)
-                val detail = if (tailErr.isNotBlank()) "Installer exited with code $code: $tailErr" else "Installer exited with code $code"
-                Result.failure(IllegalStateException(detail))
+                val combinedTail = recentLines.joinToString("\n")
+                if (!hasInternetConnection(context) || isNetworkErrorOutput(combinedTail)) {
+                    Result.failure(
+                        IllegalStateException("No internet connection (or unstable network). Please check your connection and try again.")
+                    )
+                } else {
+                    val tailErr = recentLines.takeLast(4).joinToString(" | ").take(240)
+                    val detail = if (tailErr.isNotBlank()) "Installer exited with code $code: $tailErr" else "Installer exited with code $code"
+                    Result.failure(IllegalStateException(detail))
+                }
             }
         } catch (e: Exception) {
             Result.failure(e)
