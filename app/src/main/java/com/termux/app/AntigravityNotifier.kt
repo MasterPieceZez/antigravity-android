@@ -21,6 +21,7 @@ object AntigravityNotifier {
     private const val NOTIF_SLOT_COUNT = 16
     private val notifCounter = AtomicInteger(0)
 
+    @JvmField
     @Volatile
     var isActivityForeground: Boolean = false
 

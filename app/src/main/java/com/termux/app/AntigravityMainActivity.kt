@@ -62,7 +62,9 @@ import com.termux.shared.termux.TermuxConstants.TERMUX_APP.TERMUX_SERVICE
 import com.termux.view.TerminalView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 import java.io.File
 import java.util.Locale
 
@@ -75,6 +77,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         private const val KEY_CPU_WAKELOCK = "cpu_wakelock"
         private const val KEY_SETUP_DISMISSED = "setup_dismissed"
         private const val STATE_TERMINAL_VISIBLE = "state_terminal_visible"
+        private const val MAX_LOCAL_DOWNLOAD_BYTES = 250L * 1024L * 1024L
     }
 
 
@@ -497,7 +500,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             val guessedName = URLUtil.guessFileName(url, contentDisposition, mimeType)
             if (url.startsWith("blob:") || url.startsWith("data:")) {
                 webView.evaluateJavascript(AntigravityJsBridge.buildBlobDownloadJs(url, guessedName), null)
-            } else if (AntigravityFileHelper.isLocalhostUri(url)) {
+            } else if (AntigravityFileHelper.isTrustedHubUri(url)) {
                 val cookie = runCatching { CookieManager.getInstance().getCookie(url) }.getOrNull()
                 lifecycleScope.launch(Dispatchers.IO) {
                     var conn: java.net.HttpURLConnection? = null
@@ -505,6 +508,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                         conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
                             connectTimeout = 5000
                             readTimeout = 15000
+                            instanceFollowRedirects = false
                             setRequestProperty("User-Agent", userAgent)
                             if (!cookie.isNullOrBlank()) setRequestProperty("Cookie", cookie)
                         }
@@ -518,7 +522,19 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                             guessedName,
                             resolvedMime
                         ) { dst ->
-                            conn!!.inputStream.use { src -> src.copyTo(dst) }
+                            conn!!.inputStream.use { src ->
+                                val buf = ByteArray(64 * 1024)
+                                var total = 0L
+                                while (true) {
+                                    val n = src.read(buf)
+                                    if (n <= 0) break
+                                    total += n
+                                    if (total > MAX_LOCAL_DOWNLOAD_BYTES) {
+                                        throw IllegalStateException("Download exceeds 250 MB safety limit")
+                                    }
+                                    dst.write(buf, 0, n)
+                                }
+                            }
                         }.getOrThrow()
                     }.also { conn?.disconnect() }
                     withContext(Dispatchers.Main) {
@@ -785,7 +801,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     txtReconnectBanner.text = "Restarting Antigravity Hub..."
                     reconnectBanner.visibility = View.VISIBLE
                     lifecycleScope.launch {
-                        val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity)
+                        val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity) { oauthUrl ->
+                            openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
+                        }
                         if (isFinishing || isDestroyed) return@launch
                         if (newUrl != null) {
                             currentHubUrl = newUrl
@@ -833,6 +851,15 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 }
             }
         )
+    }
+
+    private fun openOAuthUrlOnUi(oauthUrl: String, statusTarget: TextView? = null) {
+        runOnUiThread {
+            if (!isFinishing && !isDestroyed) {
+                statusTarget?.text = "Complete Google Sign-In in browser..."
+                openExternalUri(Uri.parse(oauthUrl))
+            }
+        }
     }
 
     private fun openExternalUri(uri: Uri) {
@@ -1031,7 +1058,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                         txtReconnectBanner.text = "Reconnecting to Antigravity Hub..."
                         reconnectBanner.visibility = View.VISIBLE
                         AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
-                        val newUrl = AntigravityEngine.pollForHubUrl(12000L)
+                        val newUrl = AntigravityEngine.pollForHubUrl(12000L) { oauthUrl ->
+                            openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
+                        }
                         if (newUrl != null) {
                             currentHubUrl = newUrl
                             reconnectBanner.visibility = View.GONE
@@ -1148,12 +1177,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             try {
                 AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
                 val hubUrl = AntigravityEngine.pollForHubUrl(20000L) { oauthUrl ->
-                    runOnUiThread {
-                        if (!isFinishing && !isDestroyed) {
-                            splashStatus.text = "Complete Google Sign-In in browser..."
-                            openExternalUri(Uri.parse(oauthUrl))
-                        }
-                    }
+                    openOAuthUrlOnUi(oauthUrl, splashStatus)
                 }
                 if (isFinishing || isDestroyed) return@launch
                 if (hubUrl != null) {
@@ -1219,6 +1243,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                             append("(no log yet — hubListening=${AntigravityEngine.isPortOpen(AntigravityEngine.HUB_PORT, 150)}, agyInstalled=${AntigravityEngine.isAgyInstalled()})")
                         }
                     }
+                    val installTail = AntigravityEngine.readInstallLogTail(16384).trim()
+                    if (installTail.isNotEmpty()) {
+                        append("\n\n=== install.log (last 40 lines) ===\n")
+                        append(installTail.lineSequence().toList().takeLast(40).joinToString("\n"))
+                    }
                 }
             }
             val tv = TextView(this@AntigravityMainActivity).apply {
@@ -1272,7 +1301,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     Toast.makeText(this@AntigravityMainActivity, "Failed to load credentials for ${target.email}", Toast.LENGTH_LONG).show()
                     return@launch
                 }
-                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity)
+                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity) { oauthUrl ->
+                    openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
+                }
                 if (newUrl != null) {
                     currentHubUrl = newUrl
                     splashContainer.visibility = View.GONE
@@ -1312,17 +1343,16 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     accountManager.prepareForNewAccountLogin()
                 }
                 runCatching {
-                    val cm = android.webkit.CookieManager.getInstance()
-                    cm.removeAllCookies(null)
-                    cm.flush()
-                }
-                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity) { oauthUrl ->
-                    runOnUiThread {
-                        if (!isFinishing && !isDestroyed) {
-                            txtReconnectBanner.text = "Complete Google Sign-In in browser..."
-                            openExternalUri(Uri.parse(oauthUrl))
+                    suspendCancellableCoroutine<Unit> { cont ->
+                        val cm = CookieManager.getInstance()
+                        cm.removeAllCookies {
+                            runCatching { cm.flush() }
+                            if (cont.isActive) cont.resume(Unit)
                         }
                     }
+                }
+                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity) { oauthUrl ->
+                    openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
                 }
                 if (isFinishing || isDestroyed) return@launch
                 if (newUrl != null) {
@@ -1401,7 +1431,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 val mb = res.sizeBytes / (1024.0 * 1024.0)
                 Toast.makeText(
                     this@AntigravityMainActivity,
-                    String.format(Locale.US, "Saved %s (%.1f MB)", res.displayName, mb),
+                    String.format(Locale.US, "Saved %s (%.1f MB) — sign-in tokens excluded for security", res.displayName, mb),
                     Toast.LENGTH_LONG
                 ).show()
             }.onFailure { err ->

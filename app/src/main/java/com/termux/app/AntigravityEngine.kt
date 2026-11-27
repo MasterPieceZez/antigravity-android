@@ -2,6 +2,7 @@ package com.termux.app
 
 import android.content.Context
 import android.os.Build
+import android.os.StatFs
 import android.system.Os
 import com.termux.BuildConfig
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +22,7 @@ import java.net.Socket
 import java.net.URL
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 data class AntigravityHealth(
@@ -51,6 +53,7 @@ object AntigravityEngine {
     const val BRIDGE_DIR = "$HOME_DIR/.agy_bridge"
     const val AGY_BIN = "$HOME_DIR/.local/bin/agy"
     const val AGY_LOG = "$BRIDGE_DIR/agy.log"
+    const val INSTALL_LOG = "$BRIDGE_DIR/install.log"
     const val HUB_URL_FILE = "$BRIDGE_DIR/hub.url"
     const val HUB_PID_FILE = "$BRIDGE_DIR/hub.pid"
     const val NOTIFY_FILE = "$BRIDGE_DIR/pending_notify.json"
@@ -66,6 +69,8 @@ object AntigravityEngine {
     private val tokenLock = Any()
     private val installInProgress = AtomicBoolean(false)
     private val activeInstallProcess = AtomicReference<Process?>(null)
+    private val hubTransitionCount = AtomicInteger(0)
+    private const val MIN_INSTALL_FREE_BYTES = 150L * 1024L * 1024L
     @Volatile
     private var cachedBridgeToken: String? = null
     @Volatile
@@ -86,6 +91,9 @@ object AntigravityEngine {
     fun cancelInstall() {
         activeInstallProcess.getAndSet(null)?.destroyForcibly()
     }
+
+    @JvmStatic
+    fun isHubTransitionInProgress(): Boolean = hubTransitionCount.get() > 0
 
     @JvmStatic
     fun isHubListeningCached(): Boolean = cachedHubListening
@@ -378,6 +386,24 @@ object AntigravityEngine {
             ?.replace("127.0.0.1:4400", "localhost:4400")
     }
 
+    fun readInstallLogTail(maxBytes: Int = 16384): String {
+        val logFile = File(INSTALL_LOG)
+        if (!logFile.isFile) return ""
+        return try {
+            RandomAccessFile(logFile, "r").use { raf ->
+                val len = raf.length()
+                val start = (len - maxBytes.toLong()).coerceAtLeast(0L)
+                val toRead = (len - start).toInt()
+                raf.seek(start)
+                val buf = ByteArray(toRead)
+                raf.readFully(buf)
+                String(buf, Charsets.UTF_8)
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
     fun readLogTail(maxBytes: Int = 65536): String {
         val logFile = File(AGY_LOG)
         if (!logFile.isFile) return ""
@@ -458,18 +484,23 @@ object AntigravityEngine {
 
     suspend fun startHubAndBridge(context: Context) = withContext(Dispatchers.IO) {
         if (!isBootstrapReady()) return@withContext
-        startMutex.withLock {
-            provisionBridgeAssets(context)
-            val pb = ProcessBuilder(BASH_BIN, "$BRIDGE_DIR/start_hub.sh")
-            pb.directory(File(HOME_DIR))
-            pb.environment().putAll(buildTermuxEnv())
-            pb.redirectErrorStream(true)
-            runCatching {
-                val proc = pb.start()
-                proc.outputStream.close()
-                proc.inputStream.bufferedReader().use { it.readText() }
-                proc.waitFor()
+        hubTransitionCount.incrementAndGet()
+        try {
+            startMutex.withLock {
+                provisionBridgeAssets(context)
+                val pb = ProcessBuilder(BASH_BIN, "$BRIDGE_DIR/start_hub.sh")
+                pb.directory(File(HOME_DIR))
+                pb.environment().putAll(buildTermuxEnv())
+                pb.redirectErrorStream(true)
+                runCatching {
+                    val proc = pb.start()
+                    proc.outputStream.close()
+                    proc.inputStream.bufferedReader().use { it.readText() }
+                    proc.waitFor()
+                }
             }
+        } finally {
+            hubTransitionCount.decrementAndGet()
         }
     }
 
@@ -606,17 +637,22 @@ object AntigravityEngine {
         context: Context,
         onExternalUrl: ((String) -> Unit)? = null
     ): String? = withContext(Dispatchers.IO) {
-        restartMutex.withLock {
-            stopBackgroundProcessesSuspend()
-            delay(450L)
-            runCatching { File(HUB_URL_FILE).delete() }
-            runCatching { File(PENDING_OPEN_URL_FILE).delete() }
-            File(AGY_LOG).apply {
-                parentFile?.mkdirs()
-                writeText("")
+        hubTransitionCount.incrementAndGet()
+        try {
+            restartMutex.withLock {
+                stopBackgroundProcessesSuspend()
+                delay(450L)
+                runCatching { File(HUB_URL_FILE).delete() }
+                runCatching { File(PENDING_OPEN_URL_FILE).delete() }
+                File(AGY_LOG).apply {
+                    parentFile?.mkdirs()
+                    writeText("")
+                }
+                startHubAndBridge(context)
+                pollForHubUrl(25000L, onExternalUrl = onExternalUrl)
             }
-            startHubAndBridge(context)
-            pollForHubUrl(25000L, onExternalUrl = onExternalUrl)
+        } finally {
+            hubTransitionCount.decrementAndGet()
         }
     }
 
@@ -636,6 +672,13 @@ object AntigravityEngine {
                 val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"
                 return@withContext Result.failure(
                     IllegalStateException("Unsupported device ABI ($abi). Google Antigravity CLI requires a 64-bit arm64-v8a or x86_64 Android device.")
+                )
+            }
+            val availBytes = runCatching { StatFs(FILES_DIR).availableBytes }.getOrDefault(Long.MAX_VALUE)
+            if (availBytes < MIN_INSTALL_FREE_BYTES) {
+                val availMb = availBytes / (1024.0 * 1024.0)
+                return@withContext Result.failure(
+                    IllegalStateException(String.format(java.util.Locale.US, "Not enough free internal storage (%.0f MB free, need >= 150 MB)", availMb))
                 )
             }
             provisionBridgeAssets(context)
@@ -667,14 +710,25 @@ object AntigravityEngine {
             proc.outputStream.close()
             var step = 15
             val recentLines = ArrayDeque<String>(12)
-            proc.inputStream.bufferedReader().forEachLine { line ->
-                val clean = line.trim()
-                if (clean.isNotEmpty()) {
-                    if (recentLines.size >= 10) recentLines.removeFirst()
-                    recentLines.addLast(clean)
-                    step = (step + 1).coerceAtMost(92)
-                    onStatus(step, clean.take(90))
+            val installLogFile = File(INSTALL_LOG).apply { parentFile?.mkdirs() }
+            val logWriter = runCatching { installLogFile.bufferedWriter() }.getOrNull()
+            try {
+                proc.inputStream.bufferedReader().forEachLine { line ->
+                    runCatching {
+                        logWriter?.write(line)
+                        logWriter?.newLine()
+                    }
+                    val clean = line.trim()
+                    if (clean.isNotEmpty()) {
+                        if (recentLines.size >= 10) recentLines.removeFirst()
+                        recentLines.addLast(clean)
+                        step = (step + 1).coerceAtMost(92)
+                        onStatus(step, clean.take(90))
+                    }
                 }
+            } finally {
+                runCatching { logWriter?.flush() }
+                runCatching { logWriter?.close() }
             }
             val code = proc.waitFor()
             if (code == 0 && isAgyInstalled()) {
@@ -696,20 +750,23 @@ object AntigravityEngine {
         }
     }
 
-    private fun findMatchingHubPidsInProc(): List<Int> {
+    private fun isPidAntigravityHub(pid: Int): Boolean {
         val selfPid = runCatching { Os.getpid() }.getOrDefault(-1)
+        if (pid <= 1 || pid == selfPid) return false
+        val cmdline = runCatching {
+            File("/proc/$pid/cmdline").readBytes().toString(Charsets.UTF_8).replace('\u0000', ' ')
+        }.getOrNull() ?: return false
+        return (cmdline.contains("/agy ") && cmdline.contains("--hub")) ||
+            cmdline.contains("bridge_server.py")
+    }
+
+    private fun findMatchingHubPidsInProc(): List<Int> {
         val procDir = File("/proc")
         val entries = procDir.listFiles() ?: return emptyList()
         val matched = ArrayList<Int>()
         for (entry in entries) {
             val pid = entry.name.toIntOrNull() ?: continue
-            if (pid <= 1 || pid == selfPid) continue
-            val cmdline = runCatching {
-                File(entry, "cmdline").readBytes().toString(Charsets.UTF_8).replace('\u0000', ' ')
-            }.getOrNull() ?: continue
-            if ((cmdline.contains("/agy ") && cmdline.contains("--hub")) ||
-                cmdline.contains("bridge_server.py")
-            ) {
+            if (isPidAntigravityHub(pid)) {
                 matched.add(pid)
             }
         }
@@ -722,7 +779,7 @@ object AntigravityEngine {
         val pidFile = File(HUB_PID_FILE)
         val recordedPid = runCatching { pidFile.takeIf { it.isFile }?.readText()?.trim()?.toIntOrNull() }.getOrNull()
         runCatching { pidFile.delete() }
-        if (recordedPid != null && recordedPid > 0) {
+        if (recordedPid != null && isPidAntigravityHub(recordedPid)) {
             runCatching { Os.kill(-recordedPid, 15) } // SIGTERM process group
             runCatching { Os.kill(recordedPid, 15) } // SIGTERM
         }
@@ -746,7 +803,7 @@ object AntigravityEngine {
 
     private fun forceKillHubIfListening(recordedPid: Int?, pkill: File) {
         if (isPortOpen(HUB_PORT, 100)) {
-            if (recordedPid != null && recordedPid > 0) {
+            if (recordedPid != null && isPidAntigravityHub(recordedPid)) {
                 runCatching { Os.kill(-recordedPid, 9) } // SIGKILL process group
                 runCatching { Os.kill(recordedPid, 9) } // SIGKILL
             }

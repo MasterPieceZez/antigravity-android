@@ -227,18 +227,18 @@ class AntigravityCoreTest {
             val bridgeAccounts = java.io.File(tempHome, ".agy_bridge/accounts")
             val xorCipher = object : CredentialCipher {
                 private val header = "ENC:".toByteArray(Charsets.UTF_8)
-                override fun encrypt(plain: ByteArray): ByteArray {
+                override fun encrypt(plain: ByteArray): Result<ByteArray> {
                     val out = ByteArray(header.size + plain.size)
                     System.arraycopy(header, 0, out, 0, header.size)
                     for (i in plain.indices) out[header.size + i] = (plain[i].toInt() xor 0x5A).toByte()
-                    return out
+                    return Result.success(out)
                 }
-                override fun decrypt(data: ByteArray): ByteArray {
-                    if (data.size <= header.size) return data
-                    for (i in header.indices) if (data[i] != header[i]) return data
+                override fun decrypt(data: ByteArray): Result<ByteArray> {
+                    if (data.size <= header.size) return Result.success(data)
+                    for (i in header.indices) if (data[i] != header[i]) return Result.success(data)
                     val out = ByteArray(data.size - header.size)
                     for (i in out.indices) out[i] = (data[header.size + i].toInt() xor 0x5A).toByte()
-                    return out
+                    return Result.success(out)
                 }
             }
             val mgr = AntigravityAccountManager(homeDir = tempHome, accountsRoot = bridgeAccounts, cipher = xorCipher)
@@ -271,6 +271,61 @@ class AntigravityCoreTest {
             assertNotNull(switchedLegacy)
             assertEquals("legacy@example.com", mgr.getActiveEmail())
             assertTrue(primaryToken.readText().contains("legacy_tok"))
+        } finally {
+            tempHome.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun accountManager_abortsSwitchOnDecryptFailureWithoutCorruptingActiveToken() {
+        val tempHome = java.nio.file.Files.createTempDirectory("agy_dec_fail_test").toFile()
+        try {
+            val bridgeAccounts = java.io.File(tempHome, ".agy_bridge/accounts")
+            val failingDecryptCipher = object : CredentialCipher {
+                override fun encrypt(plain: ByteArray): Result<ByteArray> =
+                    Result.success("AGYENC1\u0000".toByteArray(Charsets.UTF_8) + plain)
+                override fun decrypt(data: ByteArray): Result<ByteArray> =
+                    Result.failure(IllegalStateException("Keystore key invalidated"))
+            }
+            val mgr = AntigravityAccountManager(homeDir = tempHome, accountsRoot = bridgeAccounts, cipher = failingDecryptCipher)
+            val primaryToken = java.io.File(tempHome, ".gemini/antigravity-cli/antigravity-oauth-token")
+            primaryToken.parentFile?.mkdirs()
+
+            val activeContent = """{"id_token_email":"active@example.com","token":{"access_token":"keep_me"}}"""
+            primaryToken.writeText(activeContent)
+
+            val staleId = AntigravityAccountManager.accountIdForEmail("stale@example.com")
+            val staleDir = java.io.File(bridgeAccounts, staleId).apply { mkdirs() }
+            java.io.File(staleDir, "meta.json").writeText("""{"id":"$staleId","email":"stale@example.com","addedAt":1,"lastUsedAt":1,"quotaExhaustedAt":0,"cooldownUntil":0}""")
+            java.io.File(staleDir, "antigravity-oauth-token").writeBytes("AGYENC1\u0000corrupt_ciphertext".toByteArray(Charsets.UTF_8))
+
+            val switched = mgr.switchToAccount(staleId)
+            assertNull("Switch must abort when Keystore decryption fails", switched)
+            assertEquals("Active token must remain intact", activeContent, primaryToken.readText())
+        } finally {
+            tempHome.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun accountManager_doesNotWritePlaintextWhenEncryptionFails() {
+        val tempHome = java.nio.file.Files.createTempDirectory("agy_enc_fail_test").toFile()
+        try {
+            val bridgeAccounts = java.io.File(tempHome, ".agy_bridge/accounts")
+            val failingEncryptCipher = object : CredentialCipher {
+                override fun encrypt(plain: ByteArray): Result<ByteArray> =
+                    Result.failure(IllegalStateException("Keystore unavailable"))
+                override fun decrypt(data: ByteArray): Result<ByteArray> = Result.success(data)
+            }
+            val mgr = AntigravityAccountManager(homeDir = tempHome, accountsRoot = bridgeAccounts, cipher = failingEncryptCipher)
+            val primaryToken = java.io.File(tempHome, ".gemini/antigravity-cli/antigravity-oauth-token")
+            primaryToken.parentFile?.mkdirs()
+            primaryToken.writeText("""{"id_token_email":"sec@example.com","token":{"access_token":"never_plaintext"}}""")
+
+            val captured = mgr.captureActiveAccount()
+            assertNull("Capture must fail cleanly instead of writing plaintext", captured)
+            val expectedId = AntigravityAccountManager.accountIdForEmail("sec@example.com")
+            assertFalse(java.io.File(bridgeAccounts, "$expectedId/antigravity-oauth-token").exists())
         } finally {
             tempHome.deleteRecursively()
         }

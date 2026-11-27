@@ -30,8 +30,8 @@ data class AccountProfile(
  * and automatic failover when an account's quota is exhausted.
  */
 interface CredentialCipher {
-    fun encrypt(plain: ByteArray): ByteArray
-    fun decrypt(data: ByteArray): ByteArray
+    fun encrypt(plain: ByteArray): Result<ByteArray>
+    fun decrypt(data: ByteArray): Result<ByteArray>
 }
 
 /**
@@ -58,7 +58,7 @@ class AndroidKeystoreCredentialCipher(
         return gen.generateKey()
     }
 
-    override fun encrypt(plain: ByteArray): ByteArray {
+    override fun encrypt(plain: ByteArray): Result<ByteArray> {
         return runCatching {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
@@ -70,23 +70,25 @@ class AndroidKeystoreCredentialCipher(
             System.arraycopy(iv, 0, out, MAGIC.size + 1, iv.size)
             System.arraycopy(ct, 0, out, MAGIC.size + 1 + iv.size, ct.size)
             out
-        }.getOrElse { plain }
+        }
     }
 
-    override fun decrypt(data: ByteArray): ByteArray {
-        if (data.size <= MAGIC.size + 2) return data
+    override fun decrypt(data: ByteArray): Result<ByteArray> {
+        if (data.size <= MAGIC.size + 2) return Result.success(data)
         for (i in MAGIC.indices) {
-            if (data[i] != MAGIC[i]) return data // Legacy plaintext snapshot
+            if (data[i] != MAGIC[i]) return Result.success(data) // Legacy plaintext snapshot
         }
         return runCatching {
             val ivLen = data[MAGIC.size].toInt() and 0xFF
-            if (ivLen < 12 || data.size <= MAGIC.size + 1 + ivLen) return data
+            if (ivLen < 12 || data.size <= MAGIC.size + 1 + ivLen) {
+                throw IllegalArgumentException("Corrupted encrypted credential header")
+            }
             val iv = data.copyOfRange(MAGIC.size + 1, MAGIC.size + 1 + ivLen)
             val ct = data.copyOfRange(MAGIC.size + 1 + ivLen, data.size)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(128, iv))
             cipher.doFinal(ct)
-        }.getOrElse { data }
+        }
     }
 
     companion object {
@@ -141,9 +143,10 @@ class AntigravityAccountManager(
         ensureSecureDir(accountsRoot)
         ensureSecureDir(dir)
 
-        copyCredentialIfPresent(primaryTokenFile, File(dir, FILE_PRIMARY_TOKEN))
-        copyCredentialIfPresent(jetskiTokenFile, File(dir, FILE_JETSKI_TOKEN))
-        copyCredentialIfPresent(userScopeFile, File(dir, FILE_USER_SCOPE))
+        val okPrimary = copyCredentialIfPresent(primaryTokenFile, File(dir, FILE_PRIMARY_TOKEN))
+        val okJetski = copyCredentialIfPresent(jetskiTokenFile, File(dir, FILE_JETSKI_TOKEN))
+        val okScope = copyCredentialIfPresent(userScopeFile, File(dir, FILE_USER_SCOPE))
+        if (!okPrimary || !okJetski || !okScope) return null
 
         val now = System.currentTimeMillis()
         val existing = readMeta(dir, id, email)
@@ -194,9 +197,15 @@ class AntigravityAccountManager(
         val snapScope = File(targetDir, FILE_USER_SCOPE)
         if (!snapPrimary.isFile && !snapJetski.isFile) return null
 
-        replaceCredentialFile(snapPrimary, primaryTokenFile)
-        replaceCredentialFile(snapJetski, jetskiTokenFile)
-        replaceCredentialFile(snapScope, userScopeFile)
+        // Decrypt all present snapshot files into memory first so a Keystore failure
+        // never corrupts or partially overwrites the currently active OAuth files.
+        val decPrimary = readDecryptedCredential(snapPrimary) ?: return null
+        val decJetski = readDecryptedCredential(snapJetski) ?: return null
+        val decScope = readDecryptedCredential(snapScope) ?: return null
+
+        applyDecryptedCredential(decPrimary, primaryTokenFile)
+        applyDecryptedCredential(decJetski, jetskiTokenFile)
+        applyDecryptedCredential(decScope, userScopeFile)
 
         val now = System.currentTimeMillis()
         val updated = targetMeta.copy(
@@ -274,9 +283,10 @@ class AntigravityAccountManager(
         ensureSecureDir(accountsRoot)
         ensureSecureDir(dir)
 
-        copyCredentialIfPresent(primaryTokenFile, File(dir, FILE_PRIMARY_TOKEN))
-        copyCredentialIfPresent(jetskiTokenFile, File(dir, FILE_JETSKI_TOKEN))
-        copyCredentialIfPresent(userScopeFile, File(dir, FILE_USER_SCOPE))
+        val okPrimary = copyCredentialIfPresent(primaryTokenFile, File(dir, FILE_PRIMARY_TOKEN))
+        val okJetski = copyCredentialIfPresent(jetskiTokenFile, File(dir, FILE_JETSKI_TOKEN))
+        val okScope = copyCredentialIfPresent(userScopeFile, File(dir, FILE_USER_SCOPE))
+        if (!okPrimary || !okJetski || !okScope) return null
 
         val now = System.currentTimeMillis()
         val existing = readMeta(dir, id, email)
@@ -297,7 +307,11 @@ class AntigravityAccountManager(
         if (!file.isFile) return null
         return runCatching {
             val rawBytes = file.readBytes()
-            val plainBytes = if (encrypted && cipher != null) cipher.decrypt(rawBytes) else rawBytes
+            val plainBytes = if (encrypted && cipher != null) {
+                cipher.decrypt(rawBytes).getOrNull() ?: return@runCatching null
+            } else {
+                rawBytes
+            }
             val content = plainBytes.toString(Charsets.UTF_8)
             EMAIL_JSON_REGEX.find(content)?.groupValues?.getOrNull(1)?.let { unescapeJson(it) }?.trim()?.ifBlank { null }
         }.getOrNull()
@@ -408,20 +422,37 @@ class AntigravityAccountManager(
         return sb.toString()
     }
 
-    private fun copyCredentialIfPresent(src: File, dst: File) {
-        if (!src.isFile) return
-        val bytes = runCatching { src.readBytes() }.getOrNull() ?: return
-        val out = cipher?.encrypt(bytes) ?: bytes
-        atomicWriteBytes(dst, out)
+    private fun copyCredentialIfPresent(src: File, dst: File): Boolean {
+        if (!src.isFile) return true
+        val bytes = runCatching { src.readBytes() }.getOrNull() ?: return false
+        val out = if (cipher != null) {
+            cipher.encrypt(bytes).getOrNull() ?: return false
+        } else {
+            bytes
+        }
+        return runCatching { atomicWriteBytes(dst, out); true }.getOrDefault(false)
     }
 
-    private fun replaceCredentialFile(src: File, dst: File) {
-        if (src.isFile) {
-            val bytes = runCatching { src.readBytes() }.getOrNull() ?: return
-            val plain = cipher?.decrypt(bytes) ?: bytes
-            atomicWriteBytes(dst, plain)
+    private sealed class DecryptedCredential {
+        object Absent : DecryptedCredential()
+        class Present(val bytes: ByteArray) : DecryptedCredential()
+    }
+
+    private fun readDecryptedCredential(src: File): DecryptedCredential? {
+        if (!src.isFile) return DecryptedCredential.Absent
+        val bytes = runCatching { src.readBytes() }.getOrNull() ?: return null
+        val plain = if (cipher != null) {
+            cipher.decrypt(bytes).getOrNull() ?: return null
         } else {
-            runCatching { dst.delete() }
+            bytes
+        }
+        return DecryptedCredential.Present(plain)
+    }
+
+    private fun applyDecryptedCredential(cred: DecryptedCredential, dst: File) {
+        when (cred) {
+            is DecryptedCredential.Present -> atomicWriteBytes(dst, cred.bytes)
+            is DecryptedCredential.Absent -> runCatching { dst.delete() }
         }
     }
 

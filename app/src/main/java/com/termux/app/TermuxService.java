@@ -872,7 +872,11 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
     /** Update the shown foreground service notification after making any changes that affect it. */
     private synchronized void updateNotification() {
-        if (mWakeLock == null && mShellManager.mTermuxSessions.isEmpty() && mShellManager.mTermuxTasks.isEmpty() && !AntigravityEngine.isHubListeningCached()) {
+        if (mWakeLock == null && mShellManager.mTermuxSessions.isEmpty() && mShellManager.mTermuxTasks.isEmpty()
+            && !AntigravityEngine.isHubListeningCached()
+            && !AntigravityEngine.isHubTransitionInProgress()
+            && !BackupRestoreEngine.isBusy()
+            && !AntigravityNotifier.isActivityForeground) {
             // Exit if we are updating after the user disabled all locks with no sessions, tasks, or Hub running.
             requestStopService();
         } else {

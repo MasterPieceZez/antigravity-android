@@ -162,6 +162,7 @@ object BackupRestoreEngine {
 
     private val operationInProgress = AtomicBoolean(false)
 
+    @JvmStatic
     fun isBusy(): Boolean = operationInProgress.get()
 
     fun resolveZstdBinary(context: Context): File {
@@ -692,7 +693,7 @@ object BackupRestoreEngine {
                             lastUpdate = now
                             val rawMb = streamedBytes / (1024.0 * 1024.0)
                             val outMb = outFile.length() / (1024.0 * 1024.0)
-                            val fakePct = (10 + (rawMb / 10.0).toInt()).coerceIn(10, 88)
+                            val fakePct = (10 + ((78.0 * rawMb) / (rawMb + 250.0)).toInt()).coerceIn(10, 88)
                             onProgress(
                                 fakePct,
                                 String.format(Locale.US, "Packed %.1f MB -> %.1f MB (.zst)", rawMb, outMb)

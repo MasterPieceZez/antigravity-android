@@ -21,6 +21,7 @@ jobs:
         run: |
           bash -n app/src/main/assets/agy_bridge/start_hub.sh
           bash -n app/src/main/assets/agy_bridge/dpkg_wrap.sh
+          bash -n app/src/main/assets/agy_bridge/xdg-open
           gcc -O2 -std=c11 -Wall -Wextra -Werror tools/agy_patch.c -o /tmp/agy_patch_host
           python3 tools/test_agy_patch.py /tmp/agy_patch_host
 
@@ -215,6 +216,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
+          EXPECTED_VER="${TAG#v}"
+          if ! ls dist/AntigravityUpdate-v"${EXPECTED_VER}"-*-lite.apk >/dev/null 2>&1; then
+            echo "::error::Tag ${TAG} does not match built APK versionName in app/build.gradle"
+            exit 1
+          fi
           cd dist
           cat > release_notes.md <<'EOF'
           ## Antigravity for Android (__TAG__)
