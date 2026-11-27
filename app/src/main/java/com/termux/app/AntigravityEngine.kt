@@ -95,6 +95,7 @@ object AntigravityEngine {
 
     fun isAgyInstalled(): Boolean = File(AGY_BIN).let { it.isFile && it.length() > 0 }
 
+    @JvmStatic
     fun isInstallRunning(): Boolean = installInProgress.get()
 
     fun cancelInstall() {
