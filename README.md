@@ -16,6 +16,10 @@ An unofficial standalone Android app for Google Antigravity (`agy`). It bundles 
 
 - Bundles the Termux bootstrap, foreground service, and terminal session into one APK under its own package ID (`com.agy.os`), so it works alongside stock Termux.
 - Opens the local Hub (`localhost:4400`) in a fullscreen WebView with external browser handoff for OAuth logins and native file uploads/downloads.
+- Installs the official Antigravity CLI automatically with live download progress (`%`) and transfer speed reporting.
+- Supports multi-account credential snapshots encrypted with Android Keystore and automatic quota-exhaustion failover between accounts.
+- Includes a native in-app APK updater (`InAppUpdater`) that downloads releases directly from GitHub, verifies `SHA256SUMS.txt`, and launches the Android package installer.
+- Includes an opt-in experimental region eligibility bypass in Control Center gated behind an explicit disclaimer dialog.
 - Supports microphone input in the WebView for speech-to-text, plus Android notifications when background agent tasks finish.
 - Includes a built-in terminal (openable from the floating control pill) with extra keys (`ESC`, `TAB`, sticky `CTRL`/`ALT`, arrows, symbols) and font zoom controls.
 - Lets you share files into Antigravity via Android's Share sheet (`~/inbox` or `Download/AntigravityInbox`).

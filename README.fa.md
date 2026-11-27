@@ -37,9 +37,17 @@
 ### انتقال از Termux قبلی
 در اپلیکیشن Termux فعلی خود دستور زیر را اجرا کنید:
 
+</div>
+
+<div dir="ltr">
+
 ```bash
 pkg install -y zstd tar && tar -cf - -C /data/data/com.termux/files --exclude='./usr/var/cache/*' --exclude='./usr/tmp/*' ./usr ./home | zstd -6 -T2 -o /sdcard/Download/termux-port.tar.zst && zstd -t /sdcard/Download/termux-port.tar.zst
 ```
+
+</div>
+
+<div dir="rtl">
 
 سپس وارد آنتی‌گرویتی شوید و گزینه **Import Backup / Port Termux (.tar.zst)** را انتخاب کنید؛ مسیرهای داخلی آرشیو به‌طور خودکار به `com.agy.os` نگاشت می‌شوند.
 
