@@ -3,6 +3,7 @@ package com.termux.app
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.view.View
@@ -13,6 +14,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.termux.BuildConfig
 import com.termux.R
@@ -79,22 +81,15 @@ class ControlCenterSheetController(
         }
 
         val switchRegionBypass = view.findViewById<Switch>(R.id.switch_region_bypass)
+        var suppressRegionToggle = false
         switchRegionBypass.isChecked = AntigravityEngine.isRegionBypassEnabled(activity)
         switchRegionBypass.setOnCheckedChangeListener { _, checked ->
+            if (suppressRegionToggle) return@setOnCheckedChangeListener
             if (checked) {
                 callbacks.onToggleRegionBypass(true) {
-                    switchRegionBypass.setOnCheckedChangeListener(null)
+                    suppressRegionToggle = true
                     switchRegionBypass.isChecked = false
-                    switchRegionBypass.setOnCheckedChangeListener { _, innerChecked ->
-                        if (innerChecked) {
-                            callbacks.onToggleRegionBypass(true) {
-                                dialog.dismiss()
-                            }
-                        } else {
-                            dialog.dismiss()
-                            callbacks.onToggleRegionBypass(false) {}
-                        }
-                    }
+                    suppressRegionToggle = false
                 }
             } else {
                 dialog.dismiss()
@@ -292,6 +287,18 @@ class ControlCenterSheetController(
 
         view.findViewById<View>(R.id.sheet_btn_restore).setOnClickListener {
             callbacks.onPromptRestore(progressBar, statusText, dialog)
+        }
+
+        dialog.setOnShowListener {
+            val bottomSheet = dialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+            if (bottomSheet != null) {
+                bottomSheet.setBackgroundColor(Color.TRANSPARENT)
+                val behavior = BottomSheetBehavior.from(bottomSheet)
+                behavior.isFitToContents = true
+                behavior.skipCollapsed = true
+                behavior.isDraggable = true
+                behavior.state = BottomSheetBehavior.STATE_EXPANDED
+            }
         }
 
         dialog.show()

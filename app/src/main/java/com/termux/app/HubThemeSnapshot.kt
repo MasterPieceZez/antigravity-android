@@ -36,9 +36,9 @@ data class HubThemeSnapshot(
         collapseBtn: TextView
     ) {
         val dp = pill.resources.displayMetrics.density
-        val translucentBg = withAlpha(cardBg, 0.88f)
-        val bevelBorder = withAlpha(borderColor, 0.75f)
-        val radiusPx = (cornerRadiusDp.coerceIn(12f, 28f)) * dp
+        val translucentBg = withAlpha(cardBg, 0.90f)
+        val bevelBorder = withAlpha(borderColor, 0.85f)
+        val radiusPx = 999f * dp
         val strokePx = (borderWidthDp.coerceIn(1f, 2f) * dp).roundToInt().coerceAtLeast(1)
 
         val bg = GradientDrawable().apply {
@@ -49,7 +49,7 @@ data class HubThemeSnapshot(
         }
         pill.background = bg
         pill.clipToOutline = true
-        val elevPx = shadowDp.coerceIn(6f, 18f) * dp
+        val elevPx = shadowDp.coerceIn(8f, 18f) * dp
         pill.elevation = elevPx
         pill.translationZ = 2f * dp
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -58,7 +58,8 @@ data class HubThemeSnapshot(
             pill.outlineSpotShadowColor = shadowTint
         }
         controlsBtn.imageTintList = ColorStateList.valueOf(textPrimary)
-        collapseBtn.setTextColor(textPrimary)
+        collapseBtn.setTextColor(textSecondary)
+        pill.findViewById<View>(com.termux.R.id.pill_divider)?.setBackgroundColor(withAlpha(borderColor, 0.70f))
     }
 
     fun applyToControlSheet(root: View) {
@@ -76,10 +77,14 @@ data class HubThemeSnapshot(
             setColor(withAlpha(surfaceBg, 0.96f))
             setStroke(strokePx, withAlpha(borderColor, 0.55f))
         }
-        val firstChild = (root as? ViewGroup)?.getChildAt(0) ?: root
-        firstChild.background = sheetBg
-        firstChild.elevation = shadowDp.coerceIn(8f, 20f) * dp
+        root.background = sheetBg
+        root.clipToOutline = true
+        root.elevation = shadowDp.coerceIn(8f, 20f) * dp
 
+        val firstChild = (root as? ViewGroup)?.getChildAt(0) ?: root
+        if (firstChild !== root) {
+            firstChild.background = null
+        }
         styleCardsRecursively(firstChild, dp, strokePx)
     }
 

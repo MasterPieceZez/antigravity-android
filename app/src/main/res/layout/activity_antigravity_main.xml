@@ -519,40 +519,58 @@
         </LinearLayout>
     </ScrollView>
 
-    <!-- Sleek Minimal Draggable Floating Pill (Controls + Collapse) -->
+    <!-- Sleek Capsule Draggable Floating Pill (Status Dot + Controls + Divider + Collapse) -->
     <LinearLayout
         android:id="@+id/agy_floating_pill"
         android:layout_width="wrap_content"
-        android:layout_height="40dp"
+        android:layout_height="42dp"
         android:layout_gravity="end|center_vertical"
         android:layout_marginEnd="10dp"
         android:background="@drawable/agy_pill_bg"
-        android:elevation="8dp"
+        android:elevation="10dp"
         android:gravity="center_vertical"
+        android:layoutDirection="ltr"
         android:orientation="horizontal"
-        android:paddingStart="6dp"
+        android:paddingStart="8dp"
         android:paddingEnd="6dp"
         android:visibility="gone">
+
+        <View
+            android:id="@+id/pill_status_dot"
+            android:layout_width="6dp"
+            android:layout_height="6dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="5dp"
+            android:background="@drawable/agy_dot_ok" />
 
         <ImageButton
             android:id="@+id/pill_btn_controls"
             android:layout_width="32dp"
             android:layout_height="32dp"
             android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Control Sheet"
-            android:padding="6dp"
+            android:contentDescription="@string/agy_control_center_title"
+            android:padding="5dp"
             android:src="@drawable/ic_agy_controls" />
+
+        <View
+            android:id="@+id/pill_divider"
+            android:layout_width="1dp"
+            android:layout_height="16dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="2dp"
+            android:background="@color/agy_border" />
 
         <TextView
             android:id="@+id/pill_btn_collapse"
-            android:layout_width="28dp"
-            android:layout_height="36dp"
+            android:layout_width="26dp"
+            android:layout_height="34dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
             android:clickable="true"
             android:focusable="true"
             android:gravity="center"
             android:text="›"
             android:textColor="@color/agy_text_secondary"
-            android:textSize="16sp"
+            android:textSize="17sp"
             android:textStyle="bold" />
     </LinearLayout>
 

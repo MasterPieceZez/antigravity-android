@@ -483,6 +483,12 @@ class AntigravityCoreTest {
         assertTrue(persianUiOnly.contains("var enableBidi = false;"))
         assertTrue(persianUiOnly.contains("var enablePersianUi = true;"))
         assertTrue(persianUiOnly.contains("Ask anything, @ to mention, / for actions"))
+        assertTrue(persianUiOnly.contains("Pinned Conversations"))
+        assertTrue(persianUiOnly.contains("Interface Layout"))
+        assertTrue(persianUiOnly.contains("Select Previous Conversation"))
+        assertTrue(persianUiOnly.contains("Notification Preferences"))
+        assertTrue(persianUiOnly.contains("data-agy-fa-rtl"))
+        assertTrue(persianUiOnly.contains("data-agy-kbd"))
         assertTrue(persianUiOnly.contains("پروژه‌ها"))
         assertTrue(persianUiOnly.contains("توقف"))
 
