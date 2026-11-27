@@ -801,22 +801,22 @@ object AntigravityEngine {
 #!${'$'}PREFIX/bin/bash
 HAS_OUT=0
 ARGS=()
-for a in "\$@"; do
-    case "\$a" in
+for a in "\${'$'}@"; do
+    case "\${'$'}a" in
         -o|-O|--output|--output=*) HAS_OUT=1 ;;
     esac
 done
-if [ "\$HAS_OUT" -eq 1 ]; then
-    for a in "\$@"; do
-        case "\$a" in
+if [ "\${'$'}HAS_OUT" -eq 1 ]; then
+    for a in "\${'$'}@"; do
+        case "\${'$'}a" in
             -s|--silent|-#|--progress-bar) ;;
             -fsSL|-fSLs|-sSL|-sL) ARGS+=("-fL") ;;
-            *) ARGS+=("\$a") ;;
+            *) ARGS+=("\${'$'}a") ;;
         esac
     done
-    exec "$REAL_CURL" --progress-meter "\${ARGS[@]}"
+    exec "${'$'}REAL_CURL" --progress-meter "\${'$'}{ARGS[@]}"
 else
-    exec "$REAL_CURL" "\$@"
+    exec "${'$'}REAL_CURL" "\${'$'}@"
 fi
 EOF
                     chmod 0755 "${'$'}CURL_WRAP_DIR/curl"
