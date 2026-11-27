@@ -1,19 +1,17 @@
 name: "Feature request"
-description: "Suggest a new feature for Termux application"
+description: "Suggest a new feature or improvement for Antigravity for Android"
 title: "[Feature]: "
-labels: ["feature request"]
+labels: ["enhancement"]
 body:
   - type: textarea
     attributes:
       label: Feature description
-      description: Describe the feature and why you want it.
+      description: Describe the feature or improvement and the problem it solves.
     validations:
       required: true
   - type: textarea
     attributes:
-      label: Additional information
-      description: |
-        Does another app/terminal emulator have this feature?
-        Provide links to more background information.
+      label: Additional context
+      description: Any screenshots, workflows, or references that help explain the idea.
     validations:
-      required: true
+      required: false

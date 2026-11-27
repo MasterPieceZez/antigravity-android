@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Want ask questions about the project?
-    url: https://github.com/termux/termux-app/discussions
-    about: Join GitHub Discussions
+  - name: Questions & Discussions
+    url: https://github.com/MasterPieceZez/antigravity-android/discussions
+    about: Ask questions or discuss ideas with the community
+  - name: Latest Releases
+    url: https://github.com/MasterPieceZez/antigravity-android/releases
+    about: Download the latest Standalone or Lite APK

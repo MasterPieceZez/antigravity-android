@@ -258,7 +258,7 @@ object BackupRestoreEngine {
 
             val filesRoot = File(AntigravityEngine.FILES_DIR).apply { mkdirs() }
             val availBytes = runCatching { StatFs(filesRoot.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
-            val requiredBytes = (totalBytes * 4L).coerceAtLeast(MIN_RESTORE_FREE_BYTES)
+            val requiredBytes = (totalBytes * 2L).coerceAtLeast(MIN_RESTORE_FREE_BYTES)
             if (availBytes < requiredBytes) {
                 val availMb = availBytes / (1024.0 * 1024.0)
                 val reqMb = requiredBytes / (1024.0 * 1024.0)
@@ -513,6 +513,50 @@ object BackupRestoreEngine {
         }.await()
     }
 
+    private val BACKUP_EXCLUDED_REL_PREFIXES = listOf(
+        "usr/var/cache",
+        "usr/tmp",
+        "home/.cargo",
+        "home/.cache",
+        "home/.npm",
+        "home/.agy_bridge/accounts",
+        "home/storage"
+    )
+
+    internal fun estimateRequiredBackupBytes(rawSourceBytes: Long): Long {
+        // zstd -6 typically achieves ~2.5-3.5x compression; require ~1/3 raw size with a 128 MB floor
+        return (rawSourceBytes / 3L).coerceAtLeast(MIN_RESTORE_FREE_BYTES)
+    }
+
+    internal fun estimateBackupSourceBytes(filesRoot: File, targets: List<String>): Long {
+        val rootPrefix = filesRoot.absolutePath.trimEnd('/') + "/"
+        var total = 0L
+        for (rel in targets) {
+            val dir = File(filesRoot, rel.removePrefix("./"))
+            if (!dir.exists()) continue
+            val stack = ArrayDeque<File>()
+            stack.add(dir)
+            while (stack.isNotEmpty()) {
+                val current = stack.removeLast()
+                val isLink = runCatching {
+                    val st = Os.lstat(current.absolutePath)
+                    (st.st_mode and 0b1111000000000000) == 0b1010000000000000 // S_IFLNK
+                }.getOrDefault(false)
+                if (isLink) continue
+                val relPath = current.absolutePath.removePrefix(rootPrefix)
+                if (BACKUP_EXCLUDED_REL_PREFIXES.any { relPath == it || relPath.startsWith("$it/") }) {
+                    continue
+                }
+                if (current.isDirectory) {
+                    current.listFiles()?.forEach { stack.add(it) }
+                } else if (current.isFile) {
+                    total += current.length()
+                }
+            }
+        }
+        return total
+    }
+
     private val PACKAGES_ONLY_HOME_SUBDIRS = setOf(".local", ".agents")
 
     private fun deleteRecursivelySafe(target: File): Boolean {
@@ -640,6 +684,23 @@ object BackupRestoreEngine {
         if (!operationInProgress.compareAndSet(false, true)) {
             return@withContext Result.failure(IllegalStateException("Another backup or restore is already running"))
         }
+        val filesRoot = File(AntigravityEngine.FILES_DIR)
+        val candidates = if (mode == BackupMode.FULL) {
+            listOf("./usr", "./home")
+        } else {
+            listOf("./usr", "./home/.local", "./home/.agents")
+        }
+        val targets = candidates.filter { rel ->
+            File(filesRoot, rel.removePrefix("./")).exists()
+        }
+        if (targets.isEmpty()) {
+            operationInProgress.set(false)
+            return@withContext Result.failure(IllegalStateException("No environment directories found to back up"))
+        }
+
+        val estimatedRawBytes = estimateBackupSourceBytes(filesRoot, targets)
+        val requiredBackupBytes = estimateRequiredBackupBytes(estimatedRawBytes)
+
         val canDirectDownloads = AntigravityFileHelper.hasPublicDownloadsWriteAccess(context)
         val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
         val baseFileName = "antigravity-${mode.slug}-$stamp.tar.zst"
@@ -648,20 +709,24 @@ object BackupRestoreEngine {
             if (!downloads.exists()) downloads.mkdirs()
             val dlAvail = runCatching { StatFs(downloads.absolutePath).availableBytes }
                 .getOrDefault(Long.MAX_VALUE)
-            if (dlAvail < MIN_RESTORE_FREE_BYTES) {
+            if (dlAvail < requiredBackupBytes) {
                 operationInProgress.set(false)
+                val availMb = dlAvail / (1024.0 * 1024.0)
+                val reqMb = requiredBackupBytes / (1024.0 * 1024.0)
                 return@withContext Result.failure(
-                    IllegalStateException("Not enough free storage in Downloads to create backup")
+                    IllegalStateException(String.format(Locale.US, "Not enough free storage in Downloads (%.0f MB free, need >= %.0f MB)", availMb, reqMb))
                 )
             }
             AntigravityFileHelper.uniqueFile(downloads, baseFileName)
         } else {
             val cacheAvail = runCatching { StatFs(context.cacheDir.absolutePath).availableBytes }
                 .getOrDefault(Long.MAX_VALUE)
-            if (cacheAvail < MIN_RESTORE_FREE_BYTES) {
+            if (cacheAvail < requiredBackupBytes) {
                 operationInProgress.set(false)
+                val availMb = cacheAvail / (1024.0 * 1024.0)
+                val reqMb = requiredBackupBytes / (1024.0 * 1024.0)
                 return@withContext Result.failure(
-                    IllegalStateException("Not enough free internal storage in cache to stage backup")
+                    IllegalStateException(String.format(Locale.US, "Not enough free internal storage in cache (%.0f MB free, need >= %.0f MB)", availMb, reqMb))
                 )
             }
             File(context.cacheDir, baseFileName)
@@ -672,20 +737,6 @@ object BackupRestoreEngine {
             val zstd = resolveZstdBinary(context)
             val tar = resolveTarBinary()
             val env = AntigravityEngine.buildTermuxEnv()
-            val filesRoot = File(AntigravityEngine.FILES_DIR)
-
-            val candidates = if (mode == BackupMode.FULL) {
-                listOf("./usr", "./home")
-            } else {
-                listOf("./usr", "./home/.local", "./home/.agents")
-            }
-
-            val targets = candidates.filter { rel ->
-                File(filesRoot, rel.removePrefix("./")).exists()
-            }
-            if (targets.isEmpty()) {
-                return@withContext Result.failure(IllegalStateException("No environment directories found to back up"))
-            }
 
             onProgress(5, "Archiving & compressing (${mode.label})...")
 

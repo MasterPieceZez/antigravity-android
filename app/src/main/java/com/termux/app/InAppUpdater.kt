@@ -17,6 +17,7 @@ import java.util.Locale
 
 object InAppUpdater {
 
+    private const val ALLOWED_RELEASE_PATH_PREFIX = "/MasterPieceZez/antigravity-android/releases/download/"
     private val SHA256_LINE_REGEX = Regex("^([0-9a-fA-F]{64})\\s+\\*?(.+)$")
 
     fun isAllowedUpdateUrl(url: String?): Boolean {
@@ -24,10 +25,21 @@ object InAppUpdater {
         val uri = runCatching { URI(url.trim()) }.getOrNull() ?: return false
         if (!uri.scheme.equals("https", ignoreCase = true)) return false
         val host = uri.host?.lowercase(Locale.US) ?: return false
-        return host == "github.com" ||
-            host == "objects.githubusercontent.com" ||
+        if (host != "github.com") return false
+        val rawPath = uri.rawPath ?: return false
+        if (rawPath.contains("..") || rawPath.contains('\\')) return false
+        return rawPath.startsWith(ALLOWED_RELEASE_PATH_PREFIX)
+    }
+
+    internal fun isAllowedRedirectUrl(url: String?): Boolean {
+        if (isAllowedUpdateUrl(url)) return true
+        if (url.isNullOrBlank()) return false
+        val uri = runCatching { URI(url.trim()) }.getOrNull() ?: return false
+        if (!uri.scheme.equals("https", ignoreCase = true)) return false
+        val host = uri.host?.lowercase(Locale.US) ?: return false
+        return host == "objects.githubusercontent.com" ||
             host == "release-assets.githubusercontent.com" ||
-            host.endsWith(".githubusercontent.com")
+            host == "github-releases.githubusercontent.com"
     }
 
     fun parseSha256ForAsset(checksumsText: String, assetFileName: String): String? {
@@ -77,6 +89,17 @@ object InAppUpdater {
             return@withContext Result.failure(SecurityException("Untrusted update download URL"))
         }
 
+        val checksumsUrl = info.checksumsUrl
+        val assetName = info.apkFileName
+        if (checksumsUrl.isNullOrBlank() || assetName.isNullOrBlank()) {
+            return@withContext Result.failure(
+                SecurityException("Release is missing SHA256SUMS.txt verification metadata")
+            )
+        }
+        if (!isAllowedUpdateUrl(checksumsUrl)) {
+            return@withContext Result.failure(SecurityException("Untrusted checksums URL"))
+        }
+
         val updatesDir = File(context.cacheDir, "updates")
         if (updatesDir.exists()) {
             updatesDir.deleteRecursively()
@@ -85,7 +108,7 @@ object InAppUpdater {
             return@withContext Result.failure(IllegalStateException("Unable to create update cache directory"))
         }
 
-        val safeName = AntigravityFileHelper.sanitizeFileName(info.apkFileName, "antigravity-update.apk")
+        val safeName = AntigravityFileHelper.sanitizeFileName(assetName, "antigravity-update.apk")
             .let { if (it.endsWith(".apk", ignoreCase = true)) it else "$it.apk" }
         val targetFile = File(updatesDir, safeName)
         val partFile = File(updatesDir, "$safeName.part")
@@ -139,20 +162,12 @@ object InAppUpdater {
             }
 
             val computedSha = digest.digest().joinToString("") { "%02x".format(it) }
-            val checksumsUrl = info.checksumsUrl
-            val assetName = info.apkFileName
-            if (!checksumsUrl.isNullOrBlank() && !assetName.isNullOrBlank()) {
-                if (!isAllowedUpdateUrl(checksumsUrl)) {
-                    partFile.delete()
-                    return@withContext Result.failure(SecurityException("Untrusted checksums URL"))
-                }
-                onProgress(100, "Verifying SHA-256...")
-                val checksumsText = fetchTextFollowingRedirects(checksumsUrl)
-                val expectedSha = parseSha256ForAsset(checksumsText, assetName)
-                if (expectedSha == null || !expectedSha.equals(computedSha, ignoreCase = true)) {
-                    partFile.delete()
-                    return@withContext Result.failure(SecurityException("APK SHA-256 checksum mismatch"))
-                }
+            onProgress(100, "Verifying SHA-256...")
+            val checksumsText = fetchTextFollowingRedirects(checksumsUrl)
+            val expectedSha = parseSha256ForAsset(checksumsText, assetName)
+            if (expectedSha == null || !expectedSha.equals(computedSha, ignoreCase = true)) {
+                partFile.delete()
+                return@withContext Result.failure(SecurityException("APK SHA-256 checksum mismatch"))
             }
 
             if (targetFile.exists()) targetFile.delete()
@@ -173,8 +188,9 @@ object InAppUpdater {
     private fun openFollowingRedirects(startUrl: String, maxRedirects: Int = 5): HttpURLConnection {
         var currentUrl = startUrl
         for (hop in 0..maxRedirects) {
-            if (!isAllowedUpdateUrl(currentUrl)) {
-                throw SecurityException("Redirected to untrusted host: $currentUrl")
+            val allowed = if (hop == 0) isAllowedUpdateUrl(currentUrl) else isAllowedRedirectUrl(currentUrl)
+            if (!allowed) {
+                throw SecurityException("Untrusted update host or path: $currentUrl")
             }
             val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = false

@@ -436,4 +436,33 @@ class AntigravityCoreTest {
         assertNull(InAppUpdater.parseSha256ForAsset(checksums, "nonexistent.apk"))
         assertNull(InAppUpdater.parseSha256ForAsset(checksums, "broken.apk"))
     }
+
+    @Test
+    fun inAppUpdater_pinsRepositoryReleaseUrlsAndRedirectHosts() {
+        assertTrue(
+            InAppUpdater.isAllowedUpdateUrl(
+                "https://github.com/MasterPieceZez/antigravity-android/releases/download/v1.1.2/AntigravityUpdate-v1.1.2-universal-lite.apk"
+            )
+        )
+        assertTrue(
+            InAppUpdater.isAllowedUpdateUrl(
+                "https://github.com/MasterPieceZez/antigravity-android/releases/download/v1.1.2/SHA256SUMS.txt"
+            )
+        )
+        assertFalse(InAppUpdater.isAllowedUpdateUrl("https://github.com/otheruser/evil/releases/download/v1/app.apk"))
+        assertFalse(InAppUpdater.isAllowedUpdateUrl("https://github.com/MasterPieceZez/antigravity-android/releases/download/../evil.apk"))
+        assertFalse(InAppUpdater.isAllowedUpdateUrl("http://github.com/MasterPieceZez/antigravity-android/releases/download/v1.1.2/app.apk"))
+        assertFalse(InAppUpdater.isAllowedUpdateUrl("https://objects.githubusercontent.com/some/blob"))
+
+        assertTrue(InAppUpdater.isAllowedRedirectUrl("https://objects.githubusercontent.com/github-production-release-asset/123"))
+        assertTrue(InAppUpdater.isAllowedRedirectUrl("https://release-assets.githubusercontent.com/github-production-release-asset/123"))
+        assertFalse(InAppUpdater.isAllowedRedirectUrl("https://raw.githubusercontent.com/evil/repo/main/app.apk"))
+        assertFalse(InAppUpdater.isAllowedRedirectUrl("https://evil.example.com/app.apk"))
+    }
+
+    @Test
+    fun backupRestoreEngine_estimatesRequiredBackupSpaceWithFloor() {
+        assertEquals(128L * 1024L * 1024L, BackupRestoreEngine.estimateRequiredBackupBytes(50L * 1024L * 1024L))
+        assertEquals(300L * 1024L * 1024L, BackupRestoreEngine.estimateRequiredBackupBytes(900L * 1024L * 1024L))
+    }
 }

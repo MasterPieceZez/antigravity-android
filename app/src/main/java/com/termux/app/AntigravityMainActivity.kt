@@ -28,6 +28,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
@@ -475,6 +476,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     }
                 }
             }
+        } else {
+            webView.addJavascriptInterface(LegacyAntigravityJsInterface(), "AntigravityAndroid")
         }
 
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
@@ -589,6 +592,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     it.webChromeClient = null
                     if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
                         runCatching { WebViewCompat.removeWebMessageListener(it, "AntigravityBridge") }
+                    } else {
+                        runCatching { it.removeJavascriptInterface("AntigravityAndroid") }
                     }
                     parent?.removeView(it)
                     it.destroy()
@@ -1906,6 +1911,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             webView.webChromeClient = null
             if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
                 runCatching { WebViewCompat.removeWebMessageListener(webView, "AntigravityBridge") }
+            } else {
+                runCatching { webView.removeJavascriptInterface("AntigravityAndroid") }
             }
             (webView.parent as? ViewGroup)?.removeView(webView)
             webView.destroy()
@@ -1913,6 +1920,88 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         if (isServiceBound) {
             runCatching { unbindService(this) }
             isServiceBound = false
+        }
+    }
+
+    private inner class LegacyAntigravityJsInterface {
+        private fun runIfTrustedHub(block: () -> Unit) {
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@runOnUiThread
+                block()
+            }
+        }
+
+        @JavascriptInterface
+        fun notify(title: String?, body: String?) {
+            runIfTrustedHub {
+                showAgentDoneNotification(
+                    title = title?.ifBlank { "Antigravity" } ?: "Antigravity",
+                    body = body?.ifBlank { "Agent task finished" } ?: "Agent task finished",
+                    force = false
+                )
+            }
+        }
+
+        @JavascriptInterface
+        fun onAgentJobFinished(summary: String?) {
+            runIfTrustedHub {
+                showAgentDoneNotification(
+                    title = "Antigravity",
+                    body = summary?.ifBlank { "Agent finished its task" } ?: "Agent finished its task",
+                    force = false
+                )
+            }
+        }
+
+        @JavascriptInterface
+        fun onQuotaExhausted(reason: String?) {
+            runIfTrustedHub {
+                handleQuotaExhaustedSignal(reason?.ifBlank { "quota_exhausted" } ?: "quota_exhausted")
+            }
+        }
+
+        @JavascriptInterface
+        fun onRegionBlocked(reason: String?, isIpBlock: Boolean) {
+            runIfTrustedHub {
+                handleRegionBlockedSignal(reason?.ifBlank { "region_blocked" } ?: "region_blocked", isIpBlock)
+            }
+        }
+
+        @JavascriptInterface
+        fun onThemeSnapshot(snapshotJson: String?) {
+            if (snapshotJson.isNullOrBlank()) return
+            runIfTrustedHub {
+                handleThemeSnapshot(snapshotJson)
+            }
+        }
+
+        @JavascriptInterface
+        fun notifyDownloadTooLarge() {
+            runIfTrustedHub {
+                Toast.makeText(this@AntigravityMainActivity, "Blob download exceeds 25 MB limit", Toast.LENGTH_LONG).show()
+            }
+        }
+
+        @JavascriptInterface
+        fun saveDownloadedBase64(filename: String?, data: String?) {
+            if (data.isNullOrBlank()) return
+            runIfTrustedHub {
+                val fname = filename?.ifBlank { "download" } ?: "download"
+                lifecycleScope.launch(Dispatchers.Default) {
+                    val res = withContext(Dispatchers.IO) {
+                        AntigravityFileHelper.saveBase64ToDownloads(this@AntigravityMainActivity, fname, data)
+                    }
+                    withContext(Dispatchers.Main) {
+                        if (isFinishing || isDestroyed) return@withContext
+                        res.onSuccess { displayPath ->
+                            Toast.makeText(this@AntigravityMainActivity, "Saved to $displayPath", Toast.LENGTH_LONG).show()
+                        }.onFailure { err ->
+                            Toast.makeText(this@AntigravityMainActivity, "Download failed: ${err.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
         }
     }
 }
