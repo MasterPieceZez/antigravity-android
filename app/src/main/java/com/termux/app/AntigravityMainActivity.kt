@@ -1046,43 +1046,48 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             if (AntigravityEngine.isAgyInstalled() && !AntigravityEngine.isInstallRunning() && !BackupRestoreEngine.isBusy()) {
                 bootAntigravityHub()
             }
-        } else if (state.bootstrapComplete && webView.visibility == View.VISIBLE && !BackupRestoreEngine.isBusy() && !isHubRestartInFlight && hubViewModel.tryBeginReconnect()) {
-            lifecycleScope.launch {
-                var reconnectedUrl: String? = null
-                try {
-                    val alive = withContext(Dispatchers.IO) { AntigravityEngine.isHubHttpReady() }
-                    if (alive) {
-                        withContext(Dispatchers.IO) { accountManager.captureActiveAccount() }
-                        if (reconnectBanner.visibility == View.VISIBLE) {
-                            reconnectBanner.visibility = View.GONE
-                            val targetUrl = hubViewModel.currentState.currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
-                            if (webView.url.isNullOrBlank() && targetUrl != null) {
-                                webView.loadUrl(targetUrl)
-                            }
-                        }
-                    } else if (AntigravityEngine.isAgyInstalled()) {
-                        txtReconnectBanner.text = "Reconnecting to Antigravity Hub..."
-                        reconnectBanner.visibility = View.VISIBLE
-                        AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
-                        val newUrl = AntigravityEngine.pollForHubUrl(12000L) { oauthUrl ->
-                            openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
-                        }
-                        if (isFinishing || isDestroyed) return@launch
-                        if (newUrl != null) {
-                            reconnectedUrl = newUrl
-                            reconnectBanner.visibility = View.GONE
-                            if (webView.url.isNullOrBlank() || webView.url != newUrl) {
-                                webView.loadUrl(newUrl)
-                            } else {
-                                webView.reload()
-                            }
-                        } else {
-                            txtReconnectBanner.text = "Hub offline — tap Control Center to restart"
+        } else if (state.bootstrapComplete && webView.visibility == View.VISIBLE) {
+            triggerHubReconnectIfNeeded(reloadIfSameUrl = false)
+        }
+    }
+
+    private fun triggerHubReconnectIfNeeded(reloadIfSameUrl: Boolean = true) {
+        if (BackupRestoreEngine.isBusy() || isHubRestartInFlight || !hubViewModel.tryBeginReconnect()) return
+        lifecycleScope.launch {
+            var reconnectedUrl: String? = null
+            try {
+                val alive = withContext(Dispatchers.IO) { AntigravityEngine.isHubHttpReady() }
+                if (alive) {
+                    withContext(Dispatchers.IO) { accountManager.captureActiveAccount() }
+                    if (reconnectBanner.visibility == View.VISIBLE) {
+                        reconnectBanner.visibility = View.GONE
+                        val targetUrl = hubViewModel.currentState.currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
+                        if ((webView.url.isNullOrBlank() || reloadIfSameUrl) && targetUrl != null) {
+                            webView.loadUrl(targetUrl)
                         }
                     }
-                } finally {
-                    hubViewModel.finishReconnect(reconnectedUrl)
+                } else if (AntigravityEngine.isAgyInstalled()) {
+                    txtReconnectBanner.text = "Reconnecting to Antigravity Hub..."
+                    reconnectBanner.visibility = View.VISIBLE
+                    AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
+                    val newUrl = AntigravityEngine.pollForHubUrl(12000L) { oauthUrl ->
+                        openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
+                    }
+                    if (isFinishing || isDestroyed) return@launch
+                    if (newUrl != null) {
+                        reconnectedUrl = newUrl
+                        reconnectBanner.visibility = View.GONE
+                        if (webView.url.isNullOrBlank() || webView.url != newUrl) {
+                            webView.loadUrl(newUrl)
+                        } else {
+                            webView.reload()
+                        }
+                    } else {
+                        txtReconnectBanner.text = "Hub offline — tap Control Center to restart"
+                    }
                 }
+            } finally {
+                hubViewModel.finishReconnect(reconnectedUrl)
             }
         }
     }
