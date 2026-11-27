@@ -32,6 +32,8 @@ object AntigravityJsBridge {
                         window.AntigravityAndroid.onQuotaExhausted(String(payload.reason || 'quota_exhausted'));
                     } else if (action === 'region_blocked' && typeof window.AntigravityAndroid.onRegionBlocked === 'function') {
                         window.AntigravityAndroid.onRegionBlocked(String(payload.reason || 'region_blocked'), Boolean(payload.isIpBlock));
+                    } else if (action === 'theme_snapshot' && typeof window.AntigravityAndroid.onThemeSnapshot === 'function') {
+                        window.AntigravityAndroid.onThemeSnapshot(JSON.stringify(payload || {}));
                     }
                 } catch (e) {}
             }
@@ -221,6 +223,48 @@ object AntigravityJsBridge {
                     return origOpen.apply(this, arguments);
                 };
             }
+
+            // Snapshot Hub CSS theme (surfaces, bevel borders, radius, drop shadow, text)
+            var lastThemeSnapAt = 0;
+            function isOpaqueColor(c) {
+                return c && c !== 'transparent' && c !== 'rgba(0, 0, 0, 0)';
+            }
+            function snapshotHubTheme() {
+                var now = Date.now();
+                if (now - lastThemeSnapAt < 10000) return;
+                if (!document.body) return;
+                lastThemeSnapAt = now;
+                try {
+                    var bodyCs = getComputedStyle(document.body);
+                    var rootCs = getComputedStyle(document.documentElement);
+                    var surfaceBg = isOpaqueColor(bodyCs.backgroundColor) ? bodyCs.backgroundColor : rootCs.backgroundColor;
+                    var cardEl = document.querySelector('[class*="card"], [class*="panel"], header, nav, aside, button');
+                    var cardCs = cardEl ? getComputedStyle(cardEl) : bodyCs;
+                    var cardBg = isOpaqueColor(cardCs.backgroundColor) ? cardCs.backgroundColor : surfaceBg;
+                    var borderColor = isOpaqueColor(cardCs.borderColor) ? cardCs.borderColor : (isOpaqueColor(cardCs.borderTopColor) ? cardCs.borderTopColor : '');
+                    var borderW = parseFloat(cardCs.borderTopWidth || cardCs.borderWidth || '1') || 1;
+                    var radius = parseFloat(cardCs.borderRadius || '18') || 18;
+                    var hasShadow = (cardCs.boxShadow && cardCs.boxShadow !== 'none');
+                    var btnEl = document.querySelector('button[class*="primary"], a[class*="primary"], button');
+                    var btnCs = btnEl ? getComputedStyle(btnEl) : cardCs;
+                    var accentColor = isOpaqueColor(btnCs.backgroundColor) ? btnCs.backgroundColor : '';
+                    var textPrimary = bodyCs.color || '';
+                    var mutedEl = document.querySelector('[class*="muted"], [class*="secondary"], small');
+                    var textSecondary = mutedEl ? getComputedStyle(mutedEl).color : textPrimary;
+                    sendNative('theme_snapshot', {
+                        surfaceBg: surfaceBg || '',
+                        cardBg: cardBg || '',
+                        borderColor: borderColor || '',
+                        borderWidthDp: borderW,
+                        cornerRadiusDp: radius,
+                        shadowDp: hasShadow ? 14 : 10,
+                        accentColor: accentColor || '',
+                        textPrimary: textPrimary,
+                        textSecondary: textSecondary
+                    });
+                } catch (e) {}
+            }
+            setTimeout(snapshotHubTheme, 900);
         })();
     """.trimIndent()
 

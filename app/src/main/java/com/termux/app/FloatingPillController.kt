@@ -115,6 +115,10 @@ class FloatingPillController(
         }
     }
 
+    fun applyTheme(snapshot: HubThemeSnapshot) {
+        snapshot.applyToFloatingPill(floatingPill, pillControlsBtn, pillCollapseBtn)
+    }
+
     fun setVisible(visible: Boolean) {
         floatingPill.visibility = if (visible) View.VISIBLE else View.GONE
         if (visible) {

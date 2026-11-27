@@ -392,6 +392,15 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 handleRegionBlockedSignal(reason, isIpBlock)
             }
         }
+
+        @JavascriptInterface
+        fun onThemeSnapshot(rawJson: String?) {
+            if (rawJson.isNullOrBlank()) return
+            runOnUiThread {
+                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@runOnUiThread
+                handleThemeSnapshot(rawJson)
+            }
+        }
     }
 
     private fun injectAgentNotificationBridge() {
@@ -504,6 +513,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                         val reason = json.optString("reason", "region_blocked")
                         val isIpBlock = json.optBoolean("isIpBlock", false)
                         runOnUiThread { handleRegionBlockedSignal(reason, isIpBlock) }
+                    }
+                    "theme_snapshot" -> {
+                        runOnUiThread { handleThemeSnapshot(json.toString()) }
                     }
                 }
             }
@@ -786,7 +798,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             pillControlsBtn = pillControlsBtn,
             pillCollapseBtn = pillCollapseBtn,
             onOpenControls = { controlSheetController.show() }
-        ).also { it.setup() }
+        ).also {
+            it.setup()
+            HubThemeSnapshot.load(this)?.let { snap -> it.applyTheme(snap) }
+        }
 
         controlSheetController = ControlCenterSheetController(
             activity = this,
@@ -1465,6 +1480,13 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 .setPositiveButton("OK", null)
         }
         builder.show()
+    }
+
+    private fun handleThemeSnapshot(rawJson: String) {
+        val snap = runCatching {
+            HubThemeSnapshot.saveAndParse(this, org.json.JSONObject(rawJson))
+        }.getOrNull() ?: return
+        pillController.applyTheme(snap)
     }
 
     private fun handleQuotaExhaustedSignal(reason: String?) {

@@ -54,6 +54,7 @@ class ControlCenterSheetController(
     fun show() {
         val dialog = BottomSheetDialog(activity, R.style.Theme_Antigravity_BottomSheet)
         val view = activity.layoutInflater.inflate(R.layout.bottom_sheet_antigravity_controls, null)
+        HubThemeSnapshot.load(activity)?.applyToControlSheet(view)
         dialog.setContentView(view)
 
         val prefs = activity.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
