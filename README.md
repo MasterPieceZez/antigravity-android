@@ -6,6 +6,10 @@ An unofficial standalone Android app for Google Antigravity (`agy`). It bundles 
 
 > Not affiliated with Google LLC or the Termux project.
 
+## Preview
+
+![Antigravity for Android UI Preview](docs/preview.png)
+
 ## What's included
 
 - Bundles the Termux bootstrap, foreground service, and terminal session into one APK under its own package ID (`com.agy.os`), so it works alongside stock Termux.
