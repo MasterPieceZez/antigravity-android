@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.termux.R
@@ -95,5 +96,29 @@ object AntigravityNotifier {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         val notifId = NOTIF_ID_BASE + (notifCounter.getAndIncrement() and 0x7FFFFFFF) % NOTIF_SLOT_COUNT
         runCatching { nm?.notify(notifId, notif) }
+    }
+
+    fun showOpenUrlNotification(context: Context, url: String) {
+        createChannel(context)
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val pendingIntent = PendingIntent.getActivity(context, 4403, intent, piFlags)
+        val notif = NotificationCompat.Builder(context, NOTIF_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_antigravity_notif)
+            .setColor(Color.parseColor("#3B82F6"))
+            .setContentTitle("Antigravity Sign-In")
+            .setContentText("Tap to open browser and complete authentication")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        runCatching { nm?.notify(NOTIF_ID_BASE + NOTIF_SLOT_COUNT, notif) }
     }
 }

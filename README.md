@@ -1,6 +1,6 @@
 # Antigravity for Android
 
-[![Release](https://img.shields.io/github/v/release/MasterPieceZez/antigravity-android?color=3B82F6&label=release&v=1.0.9.1)](https://github.com/MasterPieceZez/antigravity-android/releases) [![Build](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml) ![ABI](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20x86__64%20%7C%20universal-14171D) ![License](https://img.shields.io/badge/license-GPL--3.0-22C55E)
+[![Release](https://img.shields.io/github/v/release/MasterPieceZez/antigravity-android?color=3B82F6&label=release&v=1.1.0)](https://github.com/MasterPieceZez/antigravity-android/releases) [![Build](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/MasterPieceZez/antigravity-android/actions/workflows/build-release.yml) ![ABI](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20x86__64%20%7C%20universal-14171D) ![License](https://img.shields.io/badge/license-GPL--3.0-22C55E)
 
 An unofficial standalone Android app for Google Antigravity (`agy`). It bundles the Termux Linux environment inside one APK, runs `agy --hub` locally without root or PRoot, and opens the Antigravity Web UI in a fullscreen WebView.
 
@@ -18,7 +18,7 @@ An unofficial standalone Android app for Google Antigravity (`agy`). It bundles 
 ## Setup
 
 ### Fresh install
-1. Download `AntigravityStandalone-<version>-arm64-v8a.apk` (or `universal`) from [Releases](https://github.com/MasterPieceZez/antigravity-android/releases). A 64-bit (`arm64-v8a` or `x86_64`) device is required by the Antigravity CLI. Later app updates can use `AntigravityUpdate-<version>-universal-lite.apk` without re-downloading the full bootstrap.
+1. Download `AntigravityStandalone-v<version>-arm64-v8a.apk` (or `universal`) from [Releases](https://github.com/MasterPieceZez/antigravity-android/releases). A 64-bit (`arm64-v8a` or `x86_64`) device is required by the Antigravity CLI. Later app updates can use `AntigravityUpdate-v<version>-universal-lite.apk` without re-downloading the full bootstrap.
 2. Open the app, grant storage/battery permissions if prompted (optional—downloads and shares fall back to MediaStore / `~/inbox`), and tap **Install Antigravity Automatically**.
 
 ### Port from an existing Termux install

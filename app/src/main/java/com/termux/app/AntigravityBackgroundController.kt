@@ -101,11 +101,15 @@ object AntigravityBackgroundController {
             } else if (path == "pending_open_url" && !AntigravityEngine.externalUrlHandlerActive) {
                 val url = AntigravityEngine.consumePendingOpenUrl()
                 if (url != null) {
-                    runCatching {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    if (AntigravityNotifier.isActivityForeground || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                        runCatching {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            appCtx.startActivity(intent)
                         }
-                        appCtx.startActivity(intent)
+                    } else {
+                        AntigravityNotifier.showOpenUrlNotification(appCtx, url)
                     }
                 }
             }

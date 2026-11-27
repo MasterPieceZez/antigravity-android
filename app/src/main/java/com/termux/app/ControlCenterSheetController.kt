@@ -52,6 +52,7 @@ class ControlCenterSheetController(
     }
 
     fun show() {
+        if (activity.isFinishing || activity.isDestroyed) return
         val dialog = BottomSheetDialog(activity, R.style.Theme_Antigravity_BottomSheet)
         val view = activity.layoutInflater.inflate(R.layout.bottom_sheet_antigravity_controls, null)
         HubThemeSnapshot.load(activity)?.applyToControlSheet(view)
@@ -118,8 +119,19 @@ class ControlCenterSheetController(
         val statusText = view.findViewById<TextView>(R.id.sheet_backup_status)
 
         var sheetDismissed = false
+        val progressJob = activity.lifecycleScope.launch {
+            BackupRestoreEngine.progressFlow.collect { state ->
+                if (!sheetDismissed && state != null) {
+                    progressBar.visibility = View.VISIBLE
+                    statusText.visibility = View.VISIBLE
+                    progressBar.progress = state.first
+                    statusText.text = state.second
+                }
+            }
+        }
         dialog.setOnDismissListener {
             sheetDismissed = true
+            progressJob.cancel()
             callbacks.onSheetDismissed(dialog)
         }
 
@@ -290,6 +302,7 @@ class ControlCenterSheetController(
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
             row.addView(label)
+            HubThemeSnapshot.load(activity)?.applyToAccountRow(row, label, acct.isActive)
 
             if (!acct.isActive) {
                 val btnSwitch = TextView(activity).apply {

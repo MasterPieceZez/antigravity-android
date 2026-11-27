@@ -281,11 +281,18 @@ class EmbeddedTerminalController(
                     if (mappedKeyCode != null) {
                         terminalView.onKeyDown(mappedKeyCode, KeyEvent(KeyEvent.ACTION_DOWN, mappedKeyCode))
                     } else {
+                        val ctrl = ctrlArmed
+                        val alt = altArmed
+                        if (ctrl || alt) {
+                            ctrlArmed = false
+                            altArmed = false
+                            updateModifierStyles()
+                        }
                         terminalView.inputCodePoint(
                             TerminalView.KEY_EVENT_SOURCE_VIRTUAL_KEYBOARD,
                             seq.codePointAt(0),
-                            false,
-                            false
+                            ctrl,
+                            alt
                         )
                     }
                 }

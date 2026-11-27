@@ -87,6 +87,7 @@ class AntigravityCoreTest {
 
     @Test
     fun semverComparison_handlesNumericAndPrereleaseVersions() {
+        assertTrue(AntigravityEngine.isNewerVersion("v1.1.0", "v1.0.9.1"))
         assertTrue(AntigravityEngine.isNewerVersion("v1.0.10", "v1.0.2"))
         assertTrue(AntigravityEngine.isNewerVersion("v1.1.0", "1.0.9"))
         assertTrue(AntigravityEngine.isNewerVersion("v1.0.1", "v1.0.1-rc1"))

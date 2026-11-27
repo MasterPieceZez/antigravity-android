@@ -98,11 +98,12 @@ class FloatingPillController(
         pillControlsBtn.visibility = if (pillCollapsed) View.GONE else View.VISIBLE
         pillCollapseBtn.text = if (pillCollapsed) "‹" else "›"
 
-        rootView.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, _, oldRight, _ ->
+        rootView.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
             val oldW = oldRight - oldLeft
+            val oldH = oldBottom - oldTop
             val newW = right - left
             val newH = bottom - top
-            if ((oldW != newW || oldW == 0) && newW > 0 && newH > 0 && floatingPill.visibility == View.VISIBLE) {
+            if ((oldW != newW || oldH != newH || oldW == 0) && newW > 0 && newH > 0 && floatingPill.visibility == View.VISIBLE) {
                 floatingPill.post {
                     val margin = 10 * context.resources.displayMetrics.density
                     val maxY = (rootView.height - floatingPill.height - margin).coerceAtLeast(margin)

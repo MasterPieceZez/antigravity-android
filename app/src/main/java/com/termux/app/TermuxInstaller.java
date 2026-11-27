@@ -2,7 +2,6 @@ package com.termux.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.ProgressDialog;
 import android.content.Context;
 import android.os.Build;
 import android.os.Environment;
@@ -122,7 +121,6 @@ final class TermuxInstaller {
             return;
         }
 
-        final ProgressDialog progress = ProgressDialog.show(activity, null, activity.getString(R.string.bootstrap_installer_body), true, false);
         new Thread() {
             @Override
             public void run() {
@@ -233,15 +231,6 @@ final class TermuxInstaller {
 
                 } catch (final Exception e) {
                     showBootstrapErrorDialog(activity, whenDone, Logger.getStackTracesMarkdownString(null, Logger.getStackTracesStringArray(e)));
-
-                } finally {
-                    activity.runOnUiThread(() -> {
-                        try {
-                            progress.dismiss();
-                        } catch (RuntimeException e) {
-                            // Activity already dismissed - ignore.
-                        }
-                    });
                 }
             }
         }.start();

@@ -37,6 +37,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ImageButton
@@ -61,6 +62,7 @@ import com.termux.shared.logger.Logger
 import com.termux.shared.termux.TermuxConstants.TERMUX_APP.TERMUX_SERVICE
 import com.termux.view.TerminalView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -144,6 +146,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     }
     private var isHubReconnectInFlight = false
     private var isBootInFlight = false
+    private var addAccountJob: Job? = null
     private var lastBackPressedMs = 0L
     private lateinit var pillController: FloatingPillController
     private lateinit var terminalController: EmbeddedTerminalController
@@ -471,7 +474,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         settings.domStorageEnabled = true
         settings.databaseEnabled = true
         settings.allowFileAccess = false
-        settings.allowContentAccess = true
+        settings.allowContentAccess = false
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         settings.mediaPlaybackRequiresUserGesture = false
         settings.useWideViewPort = true
@@ -781,14 +784,21 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 fileUploadCallback?.onReceiveValue(null)
                 fileUploadCallback = filePathCallback
                 val intent = try {
-                    fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                    (fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
                         type = "*/*"
+                    }).apply {
+                        if (fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        }
                     }
                 } catch (_: Exception) {
                     Intent(Intent.ACTION_GET_CONTENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
                         type = "*/*"
+                        if (fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        }
                     }
                 }
                 runCatching {
@@ -926,7 +936,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     }
 
     private fun openExternalUri(uri: Uri) {
-        val scheme = uri.scheme?.lowercase(Locale.US)
+        val scheme = uri.scheme?.lowercase(Locale.US) ?: return
+        if (scheme != "http" && scheme != "https" && scheme != "mailto") return
         if (scheme == "http" || scheme == "https") {
             val customTabs = runCatching {
                 CustomTabsIntent.Builder()
@@ -1091,6 +1102,14 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         btnGrantBattery.alpha = if (batteryOk) 0.65f else 1.0f
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (bootstrapComplete) {
+            val serviceIntent = Intent(this, TermuxService::class.java)
+            runCatching { ContextCompat.startForegroundService(this, serviceIntent) }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         isActivityForeground = true
@@ -1245,6 +1264,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         splashStatus.text = "Starting Antigravity Hub..."
 
         lifecycleScope.launch {
+            AntigravityEngine.externalUrlHandlerActive = true
             try {
                 AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
                 val hubUrl = AntigravityEngine.pollForHubUrl(20000L) { oauthUrl ->
@@ -1277,6 +1297,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     ).show()
                 }
             } finally {
+                AntigravityEngine.externalUrlHandlerActive = false
                 isBootInFlight = false
             }
         }
@@ -1323,6 +1344,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     }
                 }
             }
+            if (isFinishing || isDestroyed) return@launch
             val tv = TextView(this@AntigravityMainActivity).apply {
                 text = logContent
                 typeface = Typeface.MONOSPACE
@@ -1379,7 +1401,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity, skipStop = true) { oauthUrl ->
                     openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
                 }
+                if (isFinishing || isDestroyed) return@launch
                 if (newUrl != null) {
+                    runCatching {
+                        WebStorage.getInstance().deleteAllData()
+                        CookieManager.getInstance().removeAllCookies(null)
+                    }
                     currentHubUrl = newUrl
                     splashContainer.visibility = View.GONE
                     webView.visibility = View.VISIBLE
@@ -1407,17 +1434,22 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private fun startAddAccountFlow() {
         if (isSwitchingAccount) return
         isSwitchingAccount = true
-        txtReconnectBanner.text = "Preparing Google sign-in for new account..."
+        txtReconnectBanner.text = "Preparing Google sign-in... (tap to cancel)"
         reconnectBanner.visibility = View.VISIBLE
 
-        lifecycleScope.launch {
+        addAccountJob = lifecycleScope.launch {
+            var previousAccount: AccountProfile? = null
             try {
                 // Stop Hub first so it cannot re-write active tokens while we snapshot & clear them
                 AntigravityEngine.stopBackgroundProcessesSuspend()
-                val previousAccount = withContext(Dispatchers.IO) {
+                previousAccount = withContext(Dispatchers.IO) {
                     accountManager.prepareForNewAccountLogin()
                 }
+                reconnectBanner.setOnClickListener {
+                    addAccountJob?.cancel()
+                }
                 runCatching {
+                    WebStorage.getInstance().deleteAllData()
                     suspendCancellableCoroutine<Unit> { cont ->
                         val cm = CookieManager.getInstance()
                         cm.removeAllCookies {
@@ -1426,8 +1458,14 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                         }
                     }
                 }
+                AntigravityEngine.externalUrlHandlerActive = true
                 val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity, skipStop = true) { oauthUrl ->
                     openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) {
+                            txtReconnectBanner.text = "Complete Google Sign-In in browser (tap to cancel)"
+                        }
+                    }
                 }
                 if (isFinishing || isDestroyed) return@launch
                 if (newUrl != null) {
@@ -1450,7 +1488,28 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                         Toast.LENGTH_LONG
                     ).show()
                 }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                withContext(kotlinx.coroutines.NonCancellable) {
+                    if (previousAccount != null) {
+                        withContext(Dispatchers.IO) {
+                            accountManager.switchToAccount(previousAccount.id, clearCooldown = false)
+                        }
+                    }
+                    val restoredUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity)
+                    if (!isFinishing && !isDestroyed) {
+                        reconnectBanner.visibility = View.GONE
+                        if (restoredUrl != null) {
+                            currentHubUrl = restoredUrl
+                            webView.loadUrl(restoredUrl)
+                        }
+                        Toast.makeText(this@AntigravityMainActivity, "Account sign-in cancelled", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                throw ce
             } finally {
+                AntigravityEngine.externalUrlHandlerActive = false
+                reconnectBanner.setOnClickListener(null)
+                addAccountJob = null
                 isSwitchingAccount = false
             }
         }
@@ -1668,10 +1727,13 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         val sheet = pendingRestoreDialog
 
         var displayName = "backup.tar.zst"
+        var expectedSize = -1L
         contentResolver.query(uri, null, null, null, null)?.use { cursor ->
             val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (idx >= 0 && cursor.moveToFirst()) {
-                displayName = cursor.getString(idx) ?: displayName
+            val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+            if (cursor.moveToFirst()) {
+                if (idx >= 0) displayName = cursor.getString(idx) ?: displayName
+                if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) expectedSize = cursor.getLong(sizeIdx)
             }
         }
 
@@ -1684,7 +1746,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             val result = BackupRestoreEngine.restoreFromInputStream(
                 context = this@AntigravityMainActivity,
                 inputStreamProvider = { contentResolver.openInputStream(uri) },
-                displayName = displayName
+                displayName = displayName,
+                expectedBytes = expectedSize
             ) { pct, msg ->
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {

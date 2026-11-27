@@ -3,9 +3,15 @@ package com.termux.app
 import android.content.Context
 import android.os.StatFs
 import android.system.Os
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
@@ -161,6 +167,9 @@ object BackupRestoreEngine {
     }
 
     private val operationInProgress = AtomicBoolean(false)
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val _progressFlow = MutableStateFlow<Pair<Int, String>?>(null)
+    val progressFlow: StateFlow<Pair<Int, String>?> = _progressFlow.asStateFlow()
 
     @JvmStatic
     fun isBusy(): Boolean = operationInProgress.get()
@@ -216,15 +225,23 @@ object BackupRestoreEngine {
         context: Context,
         archiveFile: File,
         onProgress: (percent: Int, status: String) -> Unit
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        if (!operationInProgress.compareAndSet(false, true)) {
-            return@withContext Result.failure(IllegalStateException("Another backup or restore is already running"))
-        }
-        try {
-            restoreBackupInternal(context, archiveFile, onProgress)
-        } finally {
-            operationInProgress.set(false)
-        }
+    ): Result<Unit> {
+        val appCtx = context.applicationContext
+        return appScope.async {
+            if (!operationInProgress.compareAndSet(false, true)) {
+                return@async Result.failure(IllegalStateException("Another backup or restore is already running"))
+            }
+            val report: (Int, String) -> Unit = { pct, msg ->
+                _progressFlow.value = pct to msg
+                onProgress(pct, msg)
+            }
+            try {
+                restoreBackupInternal(appCtx, archiveFile, report)
+            } finally {
+                _progressFlow.value = null
+                operationInProgress.set(false)
+            }
+        }.await()
     }
 
     private suspend fun restoreBackupInternal(
@@ -447,42 +464,52 @@ object BackupRestoreEngine {
         context: Context,
         inputStreamProvider: () -> InputStream?,
         displayName: String,
+        expectedBytes: Long = -1L,
         onProgress: (percent: Int, status: String) -> Unit
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        if (!operationInProgress.compareAndSet(false, true)) {
-            return@withContext Result.failure(IllegalStateException("Another backup or restore is already running"))
-        }
-        val tempFile = File(context.cacheDir, "import_backup.tar.zst")
-        try {
-            val cacheAvail = runCatching { StatFs(context.cacheDir.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
-            if (cacheAvail < MIN_RESTORE_FREE_BYTES) {
-                return@withContext Result.failure(
-                    IllegalStateException("Not enough free internal storage in cache to stage backup")
-                )
+    ): Result<Unit> {
+        val appCtx = context.applicationContext
+        return appScope.async {
+            if (!operationInProgress.compareAndSet(false, true)) {
+                return@async Result.failure(IllegalStateException("Another backup or restore is already running"))
             }
-            onProgress(2, "Copying $displayName...")
-            val input = inputStreamProvider() ?: return@withContext Result.failure(
-                IllegalStateException("Unable to open selected file")
-            )
-            var copied = 0L
-            input.use { src ->
-                tempFile.outputStream().use { dst ->
-                    val buf = ByteArray(128 * 1024)
-                    while (true) {
-                        val n = src.read(buf)
-                        if (n <= 0) break
-                        dst.write(buf, 0, n)
-                        copied += n
-                        val mb = copied / (1024.0 * 1024.0)
-                        onProgress(5, String.format(Locale.US, "Staging backup (%.1f MB)...", mb))
+            val report: (Int, String) -> Unit = { pct, msg ->
+                _progressFlow.value = pct to msg
+                onProgress(pct, msg)
+            }
+            val tempFile = File(appCtx.cacheDir, "import_backup.tar.zst")
+            try {
+                val neededCache = if (expectedBytes > 0L) expectedBytes + MIN_RESTORE_FREE_BYTES else MIN_RESTORE_FREE_BYTES
+                val cacheAvail = runCatching { StatFs(appCtx.cacheDir.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
+                if (cacheAvail < neededCache) {
+                    return@async Result.failure(
+                        IllegalStateException("Not enough free internal storage in cache to stage backup")
+                    )
+                }
+                report(2, "Copying $displayName...")
+                val input = inputStreamProvider() ?: return@async Result.failure(
+                    IllegalStateException("Unable to open selected file")
+                )
+                var copied = 0L
+                input.use { src ->
+                    tempFile.outputStream().use { dst ->
+                        val buf = ByteArray(128 * 1024)
+                        while (true) {
+                            val n = src.read(buf)
+                            if (n <= 0) break
+                            dst.write(buf, 0, n)
+                            copied += n
+                            val mb = copied / (1024.0 * 1024.0)
+                            report(5, String.format(Locale.US, "Staging backup (%.1f MB)...", mb))
+                        }
                     }
                 }
+                restoreBackupInternal(appCtx, tempFile, report)
+            } finally {
+                runCatching { tempFile.delete() }
+                _progressFlow.value = null
+                operationInProgress.set(false)
             }
-            restoreBackupInternal(context, tempFile, onProgress)
-        } finally {
-            runCatching { tempFile.delete() }
-            operationInProgress.set(false)
-        }
+        }.await()
     }
 
     private val PACKAGES_ONLY_HOME_SUBDIRS = setOf(".local", ".agents")
@@ -589,6 +616,22 @@ object BackupRestoreEngine {
     }
 
     suspend fun createBackup(
+        context: Context,
+        mode: BackupMode,
+        onProgress: (percent: Int, status: String) -> Unit
+    ): Result<BackupResult> {
+        val appCtx = context.applicationContext
+        return appScope.async {
+            createBackupInternal(appCtx, mode) { pct, msg ->
+                _progressFlow.value = pct to msg
+                onProgress(pct, msg)
+            }.also {
+                _progressFlow.value = null
+            }
+        }.await()
+    }
+
+    private suspend fun createBackupInternal(
         context: Context,
         mode: BackupMode,
         onProgress: (percent: Int, status: String) -> Unit

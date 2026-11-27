@@ -6,6 +6,7 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.StatFs
 import android.system.Os
+import android.system.OsConstants
 import com.termux.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -137,6 +138,10 @@ object AntigravityEngine {
         env["AGY_ENABLE_HUB"] = "1"
         env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "1"
         env["BROWSER"] = "$HOME_DIR/.local/bin/xdg-open"
+        val termuxExec = File("$PREFIX_DIR/lib/libtermux-exec.so")
+        if (termuxExec.isFile) {
+            env["LD_PRELOAD"] = termuxExec.absolutePath
+        }
         return env
     }
 
@@ -615,12 +620,14 @@ object AntigravityEngine {
         var deadline = System.currentTimeMillis() + timeoutMs
         var httpReadyWithoutTokenSince = 0L
         var lastOpenedOAuthUrl: String? = null
+        val initialLogOAuth = parseOAuthUrlFromLog()
         if (onExternalUrl != null) externalUrlHandlerActive = true
         try {
             while (System.currentTimeMillis() < deadline) {
                 if (onExternalUrl != null) {
                     val pendingUrl = consumePendingOpenUrl()
-                    val oauthUrl = pendingUrl ?: parseOAuthUrlFromLog()
+                    val logOAuth = if (pendingUrl == null) parseOAuthUrlFromLog()?.takeIf { it != initialLogOAuth } else null
+                    val oauthUrl = pendingUrl ?: logOAuth
                     if (oauthUrl != null && oauthUrl != lastOpenedOAuthUrl && !AntigravityFileHelper.isTrustedHubUri(oauthUrl)) {
                         lastOpenedOAuthUrl = oauthUrl
                         // Give user up to 3 minutes to complete Google OAuth in Chrome
@@ -758,12 +765,12 @@ object AntigravityEngine {
                 export APT_LISTCHANGES_FRONTEND=none
                 INSTALL_SH="${'$'}TMPDIR/agy_install.sh"
                 trap 'rm -f "${'$'}INSTALL_SH"' EXIT
-                if ! command -v curl >/dev/null 2>&1 || ! curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh; then
+                if ! command -v curl >/dev/null 2>&1; then
                     dpkg --configure -a >/dev/null 2>&1 || true
                     apt-get update -y
                     apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" curl libcurl libngtcp2 libnghttp3 libnghttp2 libssh2 openssl zlib ca-certificates
-                    curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 180 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh
                 fi
+                curl -fsSL --retry 2 --retry-delay 2 --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 180 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh
                 if [ ! -s "${'$'}INSTALL_SH" ] || ! head -n 1 "${'$'}INSTALL_SH" | grep -q '^#!'; then
                     echo "Downloaded installer script failed basic sanity check" >&2
                     exit 1
@@ -955,22 +962,32 @@ object AntigravityEngine {
             .apply()
     }
 
+    private fun isSymbolicLink(file: File): Boolean {
+        return runCatching {
+            OsConstants.S_ISLNK(Os.lstat(file.absolutePath).st_mode)
+        }.getOrDefault(false)
+    }
+
     private fun findRegionPatchTargets(): List<File> {
-        val targets = LinkedHashSet<File>()
+        val targets = LinkedHashMap<String, File>()
         val agy = File(AGY_BIN)
-        if (agy.isFile && agy.length() > 4096L) {
-            targets.add(agy)
+        if (agy.isFile && agy.length() > 4096L && !isSymbolicLink(agy)) {
+            val canon = runCatching { agy.canonicalPath }.getOrDefault(agy.absolutePath)
+            targets[canon] = agy
         }
         for (base in listOf("$HOME_DIR/.local", "$HOME_DIR/.antigravity")) {
             val dir = File(base)
             if (!dir.isDirectory) continue
             dir.walkTopDown().maxDepth(5).forEach { f ->
-                if (f.isFile && f.length() > 4096L && (f.name == "agy" || f.name.startsWith("language_server"))) {
-                    targets.add(f)
+                if (f.isFile && f.length() > 4096L && !isSymbolicLink(f) &&
+                    (f.name == "agy" || f.name.startsWith("language_server"))
+                ) {
+                    val canon = runCatching { f.canonicalPath }.getOrDefault(f.absolutePath)
+                    targets.putIfAbsent(canon, f)
                 }
             }
         }
-        return targets.toList()
+        return targets.values.toList()
     }
 
     private fun indexOfBytes(haystack: ByteArray, length: Int, needle: ByteArray, start: Int = 0): Int {

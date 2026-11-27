@@ -1,1 +1,1 @@
-Terminal emulator app with a large set of command line utilities
+Standalone Android app for Google Antigravity (agy) with bundled Linux runtime

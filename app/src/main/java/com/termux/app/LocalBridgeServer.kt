@@ -46,20 +46,32 @@ class LocalBridgeServer(
         scope = s
         acceptJob = s.launch {
             try {
-                val ss = ServerSocket().apply {
-                    reuseAddress = true
-                    bind(
-                        InetSocketAddress(InetAddress.getByName("127.0.0.1"), AntigravityEngine.BRIDGE_PORT),
-                        16
-                    )
-                }
-                serverSocket = ss
-                listening = true
-                while (isActive && !ss.isClosed) {
-                    val client = try {
-                        ss.accept()
+                var ss: ServerSocket? = null
+                for (attempt in 1..3) {
+                    try {
+                        ss = ServerSocket().apply {
+                            reuseAddress = true
+                            bind(
+                                InetSocketAddress(InetAddress.getByName("127.0.0.1"), AntigravityEngine.BRIDGE_PORT),
+                                16
+                            )
+                        }
+                        break
                     } catch (e: Exception) {
-                        if (!isActive || ss.isClosed) break
+                        runCatching { ss?.close() }
+                        ss = null
+                        if (attempt == 3 || !isActive) throw e
+                        delay(500L * attempt)
+                    }
+                }
+                val boundSocket = ss ?: return@launch
+                serverSocket = boundSocket
+                listening = true
+                while (isActive && !boundSocket.isClosed) {
+                    val client = try {
+                        boundSocket.accept()
+                    } catch (e: Exception) {
+                        if (!isActive || boundSocket.isClosed) break
                         Logger.logDebug("LocalBridgeServer", "Accept error: ${e.message}")
                         delay(100L)
                         continue

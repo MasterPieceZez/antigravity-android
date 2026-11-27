@@ -11,6 +11,9 @@ export RES_OPTIONS="attempts:2 timeout:2"
 export AGY_ENABLE_HUB=1
 export AGY_CLI_DISABLE_AUTO_UPDATE=1
 export BROWSER="$HOME/.local/bin/xdg-open"
+if [ -z "${LD_PRELOAD:-}" ] && [ -r "$PREFIX/lib/libtermux-exec.so" ]; then
+    export LD_PRELOAD="$PREFIX/lib/libtermux-exec.so"
+fi
 
 BRIDGE_DIR="$HOME/.agy_bridge"
 AGY_BIN="$HOME/.local/bin/agy"

@@ -83,6 +83,18 @@ data class HubThemeSnapshot(
         styleCardsRecursively(firstChild, dp, strokePx)
     }
 
+    fun applyToAccountRow(row: LinearLayout, label: TextView, isActive: Boolean) {
+        val dp = row.resources.displayMetrics.density
+        val strokePx = (borderWidthDp.coerceIn(1f, 2f) * dp).roundToInt().coerceAtLeast(1)
+        row.background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = cornerRadiusDp.coerceIn(8f, 14f) * dp
+            setColor(withAlpha(cardBg, 0.92f))
+            setStroke(strokePx, withAlpha(borderColor, 0.70f))
+        }
+        label.setTextColor(if (isActive) accentColor else textPrimary)
+    }
+
     private fun styleCardsRecursively(view: View, dp: Float, strokePx: Int) {
         if (view is ViewGroup) {
             for (i in 0 until view.childCount) {
