@@ -22,12 +22,13 @@ android {
         implementation "androidx.core:core-ktx:1.13.1"
         implementation "androidx.activity:activity-ktx:1.9.3"
         implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.8.7"
+        implementation "androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7"
         implementation "androidx.drawerlayout:drawerlayout:1.2.0"
         implementation "androidx.preference:preference:1.2.1"
         implementation "androidx.viewpager:viewpager:1.0.0"
         implementation "com.google.android.material:material:1.12.0"
         implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0"
-        implementation "com.google.guava:guava:24.1-jre"
+        implementation "com.google.guava:guava:33.3.1-android"
         implementation "io.noties.markwon:core:$markwonVersion"
         implementation "io.noties.markwon:ext-strikethrough:$markwonVersion"
         implementation "io.noties.markwon:linkify:$markwonVersion"
@@ -43,20 +44,14 @@ android {
         applicationId "com.agy.os"
         minSdkVersion project.properties.minSdkVersion.toInteger()
         targetSdkVersion project.properties.targetSdkVersion.toInteger()
-        versionCode 114
-        versionName "1.1.0"
+        versionCode 115
+        versionName "1.1.1"
 
         buildConfigField "String", "TERMUX_PACKAGE_VARIANT", "\"" + project.ext.packageVariant + "\""
         buildConfigField "boolean", "AGY_LITE_UPDATE", project.ext.liteUpdate.toString()
 
         manifestPlaceholders.TERMUX_PACKAGE_NAME = "com.agy.os"
         manifestPlaceholders.TERMUX_APP_NAME = "Antigravity"
-        manifestPlaceholders.TERMUX_API_APP_NAME = "Termux:API"
-        manifestPlaceholders.TERMUX_BOOT_APP_NAME = "Termux:Boot"
-        manifestPlaceholders.TERMUX_FLOAT_APP_NAME = "Termux:Float"
-        manifestPlaceholders.TERMUX_STYLING_APP_NAME = "Termux:Styling"
-        manifestPlaceholders.TERMUX_TASKER_APP_NAME = "Termux:Tasker"
-        manifestPlaceholders.TERMUX_WIDGET_APP_NAME = "Termux:Widget"
 
         externalNativeBuild {
             ndkBuild {
@@ -139,7 +134,6 @@ android {
 
     lint {
         disable 'ProtectedPermissions'
-        abortOnError false
     }
 
     packagingOptions {
@@ -171,7 +165,7 @@ android {
 dependencies {
     testImplementation "junit:junit:4.13.2"
     testImplementation "org.robolectric:robolectric:4.10"
-    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:1.1.5"
+    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"
 }
 
 def patchBytesInPlace(byte[] data, byte[] oldSeq, byte[] newSeq) {

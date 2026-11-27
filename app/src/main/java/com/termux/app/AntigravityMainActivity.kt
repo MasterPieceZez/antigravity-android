@@ -28,7 +28,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
@@ -48,6 +47,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.ContextCompat
@@ -69,6 +69,7 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import java.io.File
 import java.util.Locale
+import kotlin.coroutines.resume
 
 class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
@@ -110,21 +111,13 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private lateinit var onboardingProgressBar: ProgressBar
     private lateinit var txtOnboardingProgress: TextView
 
+    private val hubViewModel: AntigravityHubViewModel by viewModels()
     private var termuxService: TermuxService? = null
     private var isServiceBound = false
-    private var bootstrapComplete = false
-    private var setupDismissed = false
-    private var currentHubUrl: String? = null
-    private var lastRenderCrashMs = 0L
-    private var renderCrashCount = 0
     private var pendingTerminalRestore = false
     private val accountManager = AntigravityAccountManager(cipher = AndroidKeystoreCredentialCipher())
     @Volatile
-    private var isSwitchingAccount = false
-    @Volatile
     private var isHubRestartInFlight = false
-    @Volatile
-    private var lastQuotaTriggerAt = 0L
     private var lastRegionPromptAt = 0L
     private var isRegionDialogShowing = false
     private val serviceStoppedReceiver = object : BroadcastReceiver() {
@@ -137,16 +130,14 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         override fun onReceive(context: Context?, intent: Intent?) {
             val newUrl = intent?.getStringExtra("hub_url") ?: return
             if (AntigravityFileHelper.isTrustedHubUri(newUrl) && !isFinishing && !isDestroyed) {
-                currentHubUrl = newUrl
+                hubViewModel.setCurrentHubUrl(newUrl)
                 if (webView.visibility == View.VISIBLE) {
                     webView.loadUrl(newUrl)
                 }
             }
         }
     }
-    private var isHubReconnectInFlight = false
-    private var isBootInFlight = false
-    private var addAccountJob: Job? = null
+    private var addAccountJob: kotlinx.coroutines.Job? = null
     private var lastBackPressedMs = 0L
     private lateinit var pillController: FloatingPillController
     private lateinit var terminalController: EmbeddedTerminalController
@@ -211,11 +202,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AntigravityEngine.initPaths(this)
         window.decorView.setBackgroundColor(Color.parseColor("#0B0D10"))
         setContentView(R.layout.activity_antigravity_main)
 
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        setupDismissed = prefs.getBoolean(KEY_SETUP_DISMISSED, false)
+        hubViewModel.setSetupDismissed(prefs.getBoolean(KEY_SETUP_DISMISSED, false))
         pendingTerminalRestore = savedInstanceState?.getBoolean(STATE_TERMINAL_VISIBLE, false) == true
         applyKeepScreenOn(prefs.getBoolean(KEY_KEEP_SCREEN_ON, false))
 
@@ -348,81 +340,6 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         AntigravityNotifier.showAgentDoneNotification(this, title, body, force)
     }
 
-    private inner class WebNotificationBridge {
-        @JavascriptInterface
-        fun notify(title: String?, body: String?) {
-            runOnUiThread {
-                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@runOnUiThread
-                showAgentDoneNotification(
-                    title = title?.takeIf { it.isNotBlank() } ?: "Antigravity",
-                    body = body?.takeIf { it.isNotBlank() } ?: "Agent task finished",
-                    force = false
-                )
-            }
-        }
-
-        @JavascriptInterface
-        fun onAgentJobFinished(summary: String?) {
-            runOnUiThread {
-                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@runOnUiThread
-                showAgentDoneNotification(
-                    title = "Antigravity",
-                    body = summary?.takeIf { it.isNotBlank() } ?: "Agent finished its task",
-                    force = false
-                )
-            }
-        }
-
-        @JavascriptInterface
-        fun saveDownloadedBase64(filename: String?, base64Data: String?) {
-            if (base64Data.isNullOrBlank()) return
-            lifecycleScope.launch {
-                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@launch
-                val res = withContext(Dispatchers.IO) {
-                    AntigravityFileHelper.saveBase64ToDownloads(this@AntigravityMainActivity, filename, base64Data)
-                }
-                res.onSuccess { displayPath ->
-                    Toast.makeText(this@AntigravityMainActivity, "Saved to $displayPath", Toast.LENGTH_LONG).show()
-                }.onFailure { err ->
-                    Toast.makeText(this@AntigravityMainActivity, "Download failed: ${err.message}", Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-
-        @JavascriptInterface
-        fun notifyDownloadTooLarge() {
-            runOnUiThread {
-                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@runOnUiThread
-                Toast.makeText(this@AntigravityMainActivity, "Blob download exceeds 25 MB limit", Toast.LENGTH_LONG).show()
-            }
-        }
-
-        @JavascriptInterface
-        fun onQuotaExhausted(reason: String?) {
-            runOnUiThread {
-                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@runOnUiThread
-                handleQuotaExhaustedSignal(reason)
-            }
-        }
-
-        @JavascriptInterface
-        fun onRegionBlocked(reason: String?, isIpBlock: Boolean) {
-            runOnUiThread {
-                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@runOnUiThread
-                handleRegionBlockedSignal(reason, isIpBlock)
-            }
-        }
-
-        @JavascriptInterface
-        fun onThemeSnapshot(rawJson: String?) {
-            if (rawJson.isNullOrBlank()) return
-            runOnUiThread {
-                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@runOnUiThread
-                handleThemeSnapshot(rawJson)
-            }
-        }
-    }
-
     private fun injectAgentNotificationBridge() {
         webView.evaluateJavascript(AntigravityJsBridge.AGENT_BRIDGE_JS, null)
     }
@@ -542,8 +459,6 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     }
                 }
             }
-        } else {
-            webView.addJavascriptInterface(WebNotificationBridge(), "AntigravityAndroid")
         }
 
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
@@ -621,7 +536,16 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     return false
                 }
                 if (request != null && !request.isForMainFrame) {
-                    return false
+                    val scheme = uri.scheme?.lowercase(Locale.US)
+                    val host = uri.host?.lowercase(Locale.US)
+                    val isAllowedSubframe = scheme == "https" && host != null && (
+                        host == "accounts.google.com" ||
+                        host == "apis.google.com" ||
+                        host.endsWith(".google.com") ||
+                        host.endsWith(".gstatic.com") ||
+                        host.endsWith(".googleusercontent.com")
+                    )
+                    return !isAllowedSubframe
                 }
                 openExternalUri(uri)
                 return true
@@ -639,13 +563,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
                 val didCrash = detail?.didCrash() ?: false
                 Logger.logError(LOG_TAG, "WebView render process gone. Crashed: $didCrash")
-                val now = System.currentTimeMillis()
-                if (now - lastRenderCrashMs < 15_000L) {
-                    renderCrashCount++
-                } else {
-                    renderCrashCount = 1
-                }
-                lastRenderCrashMs = now
+                val crashCount = hubViewModel.recordRenderCrash(System.currentTimeMillis())
 
                 val parent = view?.parent as? ViewGroup
                 val index = if (parent != null && view != null) parent.indexOfChild(view) else 0
@@ -656,7 +574,6 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
                         runCatching { WebViewCompat.removeWebMessageListener(it, "AntigravityBridge") }
                     }
-                    it.removeJavascriptInterface("AntigravityAndroid")
                     parent?.removeView(it)
                     it.destroy()
                 }
@@ -670,7 +587,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     setupWebView()
                 }
 
-                if (renderCrashCount >= 3) {
+                if (crashCount >= 3) {
                     reconnectBanner.visibility = View.GONE
                     webView.visibility = View.GONE
                     splashContainer.visibility = View.VISIBLE
@@ -681,7 +598,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
                 reconnectBanner.visibility = View.VISIBLE
                 txtReconnectBanner.text = "Render process restarted. Reloading..."
-                val targetUrl = currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
+                val targetUrl = hubViewModel.currentState.currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
                 if (targetUrl != null) {
                     webView.loadUrl(targetUrl)
                 } else {
@@ -781,6 +698,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 filePathCallback: ValueCallback<Array<Uri>>?,
                 fileChooserParams: FileChooserParams?
             ): Boolean {
+                if (!AntigravityFileHelper.isTrustedHubUri(webView?.url)) {
+                    filePathCallback?.onReceiveValue(null)
+                    return false
+                }
                 fileUploadCallback?.onReceiveValue(null)
                 fileUploadCallback = filePathCallback
                 val intent = try {
@@ -852,18 +773,17 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 }
                 override fun onAddAccount() = startAddAccountFlow()
                 override fun onSwitchAccount(account: AccountProfile) = switchAccountNow(account)
-                override fun onToggleRegionBypass(enabled: Boolean) = toggleRegionBypassAndRestart(enabled)
                 override fun onReloadWebView() {
-                    val url = currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
+                    val url = hubViewModel.currentState.currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
                     if (url != null) {
-                        currentHubUrl = url
+                        hubViewModel.setCurrentHubUrl(url)
                         webView.loadUrl(url)
                     } else {
                         bootAntigravityHub()
                     }
                 }
                 override fun onRestartHub() {
-                    if (isHubRestartInFlight || isSwitchingAccount) return
+                    if (isHubRestartInFlight || hubViewModel.currentState.isSwitchingAccount) return
                     isHubRestartInFlight = true
                     txtReconnectBanner.text = "Restarting Antigravity Hub..."
                     reconnectBanner.visibility = View.VISIBLE
@@ -874,7 +794,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                             }
                             if (isFinishing || isDestroyed) return@launch
                             if (newUrl != null) {
-                                currentHubUrl = newUrl
+                                hubViewModel.setCurrentHubUrl(newUrl)
                                 splashContainer.visibility = View.GONE
                                 webView.visibility = View.VISIBLE
                                 if (!terminalController.isVisible()) {
@@ -897,7 +817,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 override fun onClearWebViewCache() {
                     webView.clearCache(true)
                     Toast.makeText(this@AntigravityMainActivity, "WebView cache cleared — reloading...", Toast.LENGTH_SHORT).show()
-                    val url = currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
+                    val url = hubViewModel.currentState.currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
                     if (url != null) webView.loadUrl(url) else bootAntigravityHub()
                 }
                 override fun onReinstallCliConfirmed() {
@@ -955,12 +875,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         btnGrantStorage.setOnClickListener { requestAllFilesPermission() }
         btnGrantBattery.setOnClickListener { requestBatteryOptimizationExclusion() }
         findViewById<View>(R.id.btn_setup_skip).setOnClickListener {
-            setupDismissed = true
+            hubViewModel.setSetupDismissed(true)
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(KEY_SETUP_DISMISSED, true).apply()
             proceedAfterSetup()
         }
         findViewById<View>(R.id.btn_setup_continue).setOnClickListener {
-            setupDismissed = true
+            hubViewModel.setSetupDismissed(true)
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(KEY_SETUP_DISMISSED, true).apply()
             proceedAfterSetup()
         }
@@ -1031,7 +951,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
         isServiceBound = true
         termuxService = (service as TermuxService.LocalBinder).service
-        if (!bootstrapComplete) {
+        if (!hubViewModel.currentState.bootstrapComplete) {
             runBootstrapSequence()
         } else if (terminalController.isVisible()) {
             terminalController.ensureSession()
@@ -1052,7 +972,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         splashStatus.text = "Preparing embedded Linux engine..."
         TermuxInstaller.setupBootstrapIfNeeded(this) {
             if (isFinishing || isDestroyed) return@setupBootstrapIfNeeded
-            bootstrapComplete = true
+            hubViewModel.markBootstrapComplete()
             lifecycleScope.launch {
                 withContext(Dispatchers.IO) {
                     AntigravityEngine.provisionBridgeAssets(this@AntigravityMainActivity)
@@ -1081,7 +1001,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private fun checkPermissionsOrProceed() {
         val storageOk = hasAllFilesAccess()
         val batteryOk = isIgnoringBatteryOptimizations()
-        if ((!storageOk || !batteryOk) && !setupDismissed) {
+        if ((!storageOk || !batteryOk) && !hubViewModel.currentState.setupDismissed) {
+            hubViewModel.showSetup()
             splashContainer.visibility = View.GONE
             onboardingContainer.visibility = View.GONE
             webView.visibility = View.GONE
@@ -1104,7 +1025,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
     override fun onStart() {
         super.onStart()
-        if (bootstrapComplete) {
+        if (hubViewModel.currentState.bootstrapComplete) {
             val serviceIntent = Intent(this, TermuxService::class.java)
             runCatching { ContextCompat.startForegroundService(this, serviceIntent) }
         }
@@ -1114,58 +1035,54 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         super.onResume()
         isActivityForeground = true
         AntigravityNotifier.isActivityForeground = true
-        if (bootstrapComplete && setupContainer.visibility == View.VISIBLE) {
+        val state = hubViewModel.currentState
+        if (state.bootstrapComplete && setupContainer.visibility == View.VISIBLE) {
             updateSetupButtons()
             if (hasAllFilesAccess() && isIgnoringBatteryOptimizations()) {
                 proceedAfterSetup()
             }
-        } else if (bootstrapComplete && onboardingContainer.visibility == View.VISIBLE) {
+        } else if (state.bootstrapComplete && onboardingContainer.visibility == View.VISIBLE) {
             refreshDetectedBackupBanner()
             if (AntigravityEngine.isAgyInstalled() && !AntigravityEngine.isInstallRunning() && !BackupRestoreEngine.isBusy()) {
                 bootAntigravityHub()
             }
-        } else if (bootstrapComplete && webView.visibility == View.VISIBLE && !BackupRestoreEngine.isBusy() && !isHubReconnectInFlight && !isBootInFlight && !isSwitchingAccount && !isHubRestartInFlight) {
-            triggerHubReconnectIfNeeded(reloadIfSameUrl = false)
-        }
-    }
-
-    private fun triggerHubReconnectIfNeeded(reloadIfSameUrl: Boolean = true) {
-        if (isHubReconnectInFlight || isBootInFlight || isSwitchingAccount || isHubRestartInFlight || BackupRestoreEngine.isBusy()) return
-        isHubReconnectInFlight = true
-        lifecycleScope.launch {
-            try {
-                val alive = withContext(Dispatchers.IO) { AntigravityEngine.isHubHttpReady() }
-                if (alive) {
-                    withContext(Dispatchers.IO) { accountManager.captureActiveAccount() }
-                    if (reconnectBanner.visibility == View.VISIBLE) {
-                        reconnectBanner.visibility = View.GONE
-                        val targetUrl = currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
-                        if ((webView.url.isNullOrBlank() || reloadIfSameUrl) && targetUrl != null) {
-                            webView.loadUrl(targetUrl)
+        } else if (state.bootstrapComplete && webView.visibility == View.VISIBLE && !BackupRestoreEngine.isBusy() && !isHubRestartInFlight && hubViewModel.tryBeginReconnect()) {
+            lifecycleScope.launch {
+                var reconnectedUrl: String? = null
+                try {
+                    val alive = withContext(Dispatchers.IO) { AntigravityEngine.isHubHttpReady() }
+                    if (alive) {
+                        withContext(Dispatchers.IO) { accountManager.captureActiveAccount() }
+                        if (reconnectBanner.visibility == View.VISIBLE) {
+                            reconnectBanner.visibility = View.GONE
+                            val targetUrl = hubViewModel.currentState.currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
+                            if (webView.url.isNullOrBlank() && targetUrl != null) {
+                                webView.loadUrl(targetUrl)
+                            }
                         }
-                    }
-                } else if (AntigravityEngine.isAgyInstalled()) {
-                    txtReconnectBanner.text = "Reconnecting to Antigravity Hub..."
-                    reconnectBanner.visibility = View.VISIBLE
-                    AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
-                    val newUrl = AntigravityEngine.pollForHubUrl(12000L) { oauthUrl ->
-                        openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
-                    }
-                    if (isFinishing || isDestroyed) return@launch
-                    if (newUrl != null) {
-                        currentHubUrl = newUrl
-                        reconnectBanner.visibility = View.GONE
-                        if (webView.url.isNullOrBlank() || webView.url != newUrl) {
-                            webView.loadUrl(newUrl)
+                    } else if (AntigravityEngine.isAgyInstalled()) {
+                        txtReconnectBanner.text = "Reconnecting to Antigravity Hub..."
+                        reconnectBanner.visibility = View.VISIBLE
+                        AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
+                        val newUrl = AntigravityEngine.pollForHubUrl(12000L) { oauthUrl ->
+                            openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
+                        }
+                        if (isFinishing || isDestroyed) return@launch
+                        if (newUrl != null) {
+                            reconnectedUrl = newUrl
+                            reconnectBanner.visibility = View.GONE
+                            if (webView.url.isNullOrBlank() || webView.url != newUrl) {
+                                webView.loadUrl(newUrl)
+                            } else {
+                                webView.reload()
+                            }
                         } else {
-                            webView.reload()
+                            txtReconnectBanner.text = "Hub offline — tap Control Center to restart"
                         }
-                    } else {
-                        txtReconnectBanner.text = "Hub offline — tap Control Center to restart"
                     }
+                } finally {
+                    hubViewModel.finishReconnect(reconnectedUrl)
                 }
-            } finally {
-                isHubReconnectInFlight = false
             }
         }
     }
@@ -1222,6 +1139,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     }
 
     private fun showOnboardingScreen() {
+        hubViewModel.showOnboarding()
         splashContainer.visibility = View.GONE
         setupContainer.visibility = View.GONE
         webView.visibility = View.GONE
@@ -1255,8 +1173,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     }
 
     private fun bootAntigravityHub() {
-        if (isBootInFlight) return
-        isBootInFlight = true
+        if (!hubViewModel.tryBeginBoot()) return
         onboardingContainer.visibility = View.GONE
         setupContainer.visibility = View.GONE
         splashContainer.visibility = View.VISIBLE
@@ -1265,14 +1182,15 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
         lifecycleScope.launch {
             AntigravityEngine.externalUrlHandlerActive = true
+            var resolvedHubUrl: String? = null
             try {
                 AntigravityEngine.startHubAndBridge(this@AntigravityMainActivity)
                 val hubUrl = AntigravityEngine.pollForHubUrl(20000L) { oauthUrl ->
                     openOAuthUrlOnUi(oauthUrl, splashStatus)
                 }
                 if (isFinishing || isDestroyed) return@launch
+                resolvedHubUrl = hubUrl
                 if (hubUrl != null) {
-                    currentHubUrl = hubUrl
                     splashContainer.visibility = View.GONE
                     splashActions.visibility = View.GONE
                     webView.visibility = View.VISIBLE
@@ -1298,7 +1216,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 }
             } finally {
                 AntigravityEngine.externalUrlHandlerActive = false
-                isBootInFlight = false
+                hubViewModel.finishBoot(resolvedHubUrl)
             }
         }
     }
@@ -1367,13 +1285,73 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
 
+    private suspend fun clearWebViewSessionData() {
+        withContext(Dispatchers.Main) {
+            runCatching { WebStorage.getInstance().deleteAllData() }
+        }
+        suspendCancellableCoroutine<Unit> { cont ->
+            runOnUiThread {
+                runCatching {
+                    val cm = CookieManager.getInstance()
+                    cm.removeAllCookies {
+                        runCatching { cm.flush() }
+                        if (cont.isActive) cont.resume(Unit)
+                    }
+                }.onFailure {
+                    if (cont.isActive) cont.resume(Unit)
+                }
+            }
+        }
+    }
+
+    private suspend fun performAccountSwitch(
+        target: AccountProfile,
+        autoReason: String? = null,
+        alreadySwitched: Boolean = false
+    ): String? {
+        val switched = if (alreadySwitched) {
+            target
+        } else {
+            // Stop the Hub before swapping OAuth files so a shutting-down Hub cannot clobber them
+            AntigravityEngine.stopBackgroundProcessesSuspend()
+            withContext(Dispatchers.IO) {
+                accountManager.switchToAccount(target.id, clearCooldown = autoReason == null)
+            }
+        }
+        if (switched == null) {
+            reconnectBanner.visibility = View.GONE
+            Toast.makeText(this@AntigravityMainActivity, "Failed to load credentials for ${target.email}", Toast.LENGTH_LONG).show()
+            return null
+        }
+        clearWebViewSessionData()
+        val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity)
+        if (newUrl != null) {
+            splashContainer.visibility = View.GONE
+            webView.visibility = View.VISIBLE
+            floatingPill.visibility = View.VISIBLE
+            webView.loadUrl(newUrl)
+            val msg = if (autoReason != null) {
+                "Quota drained — auto-switched to ${switched.email}"
+            } else {
+                "Switched to ${switched.email}"
+            }
+            Toast.makeText(this@AntigravityMainActivity, msg, Toast.LENGTH_LONG).show()
+            if (autoReason != null) {
+                showAgentDoneNotification("Account Auto-Switched", msg, force = true)
+            }
+        } else {
+            reconnectBanner.visibility = View.GONE
+            Toast.makeText(this@AntigravityMainActivity, "Switched credentials, but Hub failed to restart", Toast.LENGTH_LONG).show()
+        }
+        return newUrl
+    }
+
     private fun switchAccountNow(
         target: AccountProfile,
         autoReason: String? = null,
         alreadySwitched: Boolean = false
     ) {
-        if (isSwitchingAccount) return
-        isSwitchingAccount = true
+        if (!hubViewModel.tryBeginAccountSwitch()) return
         val bannerMsg = if (autoReason != null) {
             "Quota drained — switching to ${target.email}..."
         } else {
@@ -1383,62 +1361,24 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         reconnectBanner.visibility = View.VISIBLE
 
         lifecycleScope.launch {
+            var newUrl: String? = null
             try {
-                // Stop Hub before swapping credentials so it cannot overwrite the target OAuth files on exit
-                AntigravityEngine.stopBackgroundProcessesSuspend()
-                val switched = if (alreadySwitched) {
-                    target
-                } else {
-                    withContext(Dispatchers.IO) {
-                        accountManager.switchToAccount(target.id, clearCooldown = autoReason == null)
-                    }
-                }
-                if (switched == null) {
-                    reconnectBanner.visibility = View.GONE
-                    Toast.makeText(this@AntigravityMainActivity, "Failed to load credentials for ${target.email}", Toast.LENGTH_LONG).show()
-                    return@launch
-                }
-                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity, skipStop = true) { oauthUrl ->
-                    openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
-                }
-                if (isFinishing || isDestroyed) return@launch
-                if (newUrl != null) {
-                    runCatching {
-                        WebStorage.getInstance().deleteAllData()
-                        CookieManager.getInstance().removeAllCookies(null)
-                    }
-                    currentHubUrl = newUrl
-                    splashContainer.visibility = View.GONE
-                    webView.visibility = View.VISIBLE
-                    floatingPill.visibility = View.VISIBLE
-                    webView.loadUrl(newUrl)
-                    val msg = if (autoReason != null) {
-                        "Quota drained — auto-switched to ${switched.email}"
-                    } else {
-                        "Switched to ${switched.email}"
-                    }
-                    Toast.makeText(this@AntigravityMainActivity, msg, Toast.LENGTH_LONG).show()
-                    if (autoReason != null) {
-                        showAgentDoneNotification("Account Auto-Switched", msg, force = true)
-                    }
-                } else {
-                    reconnectBanner.visibility = View.GONE
-                    Toast.makeText(this@AntigravityMainActivity, "Switched credentials, but Hub failed to restart", Toast.LENGTH_LONG).show()
-                }
+                newUrl = performAccountSwitch(target, autoReason, alreadySwitched)
             } finally {
-                isSwitchingAccount = false
+                hubViewModel.finishAccountSwitch(newUrl)
             }
         }
     }
 
     private fun startAddAccountFlow() {
-        if (isSwitchingAccount) return
-        isSwitchingAccount = true
+        if (!hubViewModel.tryBeginAccountSwitch()) return
         txtReconnectBanner.text = "Preparing Google sign-in... (tap to cancel)"
         reconnectBanner.visibility = View.VISIBLE
 
-        addAccountJob = lifecycleScope.launch {
+        lateinit var job: kotlinx.coroutines.Job
+        job = lifecycleScope.launch {
             var previousAccount: AccountProfile? = null
+            var resolvedUrl: String? = null
             try {
                 // Stop Hub first so it cannot re-write active tokens while we snapshot & clear them
                 AntigravityEngine.stopBackgroundProcessesSuspend()
@@ -1446,18 +1386,9 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     accountManager.prepareForNewAccountLogin()
                 }
                 reconnectBanner.setOnClickListener {
-                    addAccountJob?.cancel()
+                    job.cancel()
                 }
-                runCatching {
-                    WebStorage.getInstance().deleteAllData()
-                    suspendCancellableCoroutine<Unit> { cont ->
-                        val cm = CookieManager.getInstance()
-                        cm.removeAllCookies {
-                            runCatching { cm.flush() }
-                            if (cont.isActive) cont.resume(Unit)
-                        }
-                    }
-                }
+                clearWebViewSessionData()
                 AntigravityEngine.externalUrlHandlerActive = true
                 val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity, skipStop = true) { oauthUrl ->
                     openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
@@ -1469,7 +1400,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 }
                 if (isFinishing || isDestroyed) return@launch
                 if (newUrl != null) {
-                    currentHubUrl = newUrl
+                    resolvedUrl = newUrl
                     splashContainer.visibility = View.GONE
                     webView.visibility = View.VISIBLE
                     floatingPill.visibility = View.VISIBLE
@@ -1499,7 +1430,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     if (!isFinishing && !isDestroyed) {
                         reconnectBanner.visibility = View.GONE
                         if (restoredUrl != null) {
-                            currentHubUrl = restoredUrl
+                            resolvedUrl = restoredUrl
                             webView.loadUrl(restoredUrl)
                         }
                         Toast.makeText(this@AntigravityMainActivity, "Account sign-in cancelled", Toast.LENGTH_SHORT).show()
@@ -1510,49 +1441,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 AntigravityEngine.externalUrlHandlerActive = false
                 reconnectBanner.setOnClickListener(null)
                 addAccountJob = null
-                isSwitchingAccount = false
+                hubViewModel.finishAccountSwitch(resolvedUrl)
             }
         }
-    }
-
-    private fun toggleRegionBypassAndRestart(enabled: Boolean) {
-        if (isHubRestartInFlight || isSwitchingAccount) return
-        isHubRestartInFlight = true
-        txtReconnectBanner.text = if (enabled) {
-            "Applying region eligibility bypass & restarting Hub..."
-        } else {
-            "Reverting region eligibility bypass & restarting Hub..."
-        }
-        reconnectBanner.visibility = View.VISIBLE
-
-        lifecycleScope.launch {
-            try {
-                AntigravityEngine.stopBackgroundProcessesSuspend()
-                val patched = AntigravityEngine.applyRegionEligibilityPatch(enabled)
-                AntigravityEngine.setRegionBypassEnabled(this@AntigravityMainActivity, enabled)
-                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity, skipStop = true) { oauthUrl ->
-                    openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
-                }
-                if (isFinishing || isDestroyed) return@launch
-                if (newUrl != null) {
-                    currentHubUrl = newUrl
-                    reconnectBanner.visibility = View.GONE
-                    webView.loadUrl(newUrl)
-                    val msg = when {
-                        enabled && patched -> "Region eligibility bypass enabled"
-                        enabled -> "Region bypass saved (binary already patched or not found)"
-                        patched -> "Region eligibility bypass disabled"
-                        else -> "Region bypass disabled"
-                    }
-                    Toast.makeText(this@AntigravityMainActivity, msg, Toast.LENGTH_LONG).show()
-                } else {
-                    reconnectBanner.visibility = View.GONE
-                    Toast.makeText(this@AntigravityMainActivity, "Failed to restart Hub — check Hub Logs", Toast.LENGTH_LONG).show()
-                }
-            } finally {
-                isHubRestartInFlight = false
-            }
-        }
+        addAccountJob = job
     }
 
     private fun handleRegionBlockedSignal(reason: String?, isIpBlock: Boolean) {
@@ -1561,32 +1453,20 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         lastRegionPromptAt = now
         isRegionDialogShowing = true
 
-        val alreadyEnabled = AntigravityEngine.isRegionBypassEnabled(this)
-        val builder = AlertDialog.Builder(this)
-            .setOnDismissListener { isRegionDialogShowing = false }
-
-        if (!alreadyEnabled && !isIpBlock) {
-            builder
-                .setTitle("Account Region Not Supported")
-                .setMessage(
-                    "Google reported that this account's region isn't eligible for Antigravity.\n\n" +
-                    "Enable the Region Eligibility Bypass? This patches the local client and restarts the Hub. " +
-                    "You can turn it off anytime in Control Center."
-                )
-                .setPositiveButton("Enable & Restart Hub") { _, _ ->
-                    toggleRegionBypassAndRestart(true)
-                }
-                .setNegativeButton("Dismiss", null)
+        val title = if (isIpBlock) "Location Blocked by Google" else "Account Region Not Supported"
+        val message = if (isIpBlock) {
+            "Google blocked this request because your current IP or location is not supported by Google Antigravity.\n\n" +
+                "Connect to a supported region and reload."
         } else {
-            builder
-                .setTitle("Location Blocked by Google")
-                .setMessage(
-                    "Google blocked this request due to IP/location (\"User location is not supported\").\n\n" +
-                    "The account region bypass cannot override IP blocks — connect to a supported VPN region and reload."
-                )
-                .setPositiveButton("OK", null)
+            "Google reported that this account's region is not eligible for Google Antigravity.\n\n" +
+                "Try signing in with an eligible account or using a supported region."
         }
-        builder.show()
+        AlertDialog.Builder(this)
+            .setOnDismissListener { isRegionDialogShowing = false }
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun handleThemeSnapshot(rawJson: String) {
@@ -1597,24 +1477,33 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     }
 
     private fun handleQuotaExhaustedSignal(reason: String?) {
-        val now = System.currentTimeMillis()
-        if (isSwitchingAccount || now - lastQuotaTriggerAt < 15_000L) return
         if (!accountManager.isAutoSwitchEnabled(this)) return
-        lastQuotaTriggerAt = now
+        if (!hubViewModel.tryBeginQuotaFailover(System.currentTimeMillis())) return
 
         lifecycleScope.launch {
-            val next = withContext(Dispatchers.IO) {
-                accountManager.markCurrentQuotaExhaustedAndPickNext()
-            }
-            if (isFinishing || isDestroyed) return@launch
-            if (next != null) {
-                switchAccountNow(next, autoReason = reason ?: "quota_exhausted", alreadySwitched = true)
-            } else {
-                Toast.makeText(
-                    this@AntigravityMainActivity,
-                    "Quota drained — no other available account to switch to",
-                    Toast.LENGTH_LONG
-                ).show()
+            var newUrl: String? = null
+            try {
+                val next = withContext(Dispatchers.IO) {
+                    accountManager.markCurrentQuotaExhaustedAndSelectNext()
+                }
+                if (isFinishing || isDestroyed) return@launch
+                if (next != null) {
+                    txtReconnectBanner.text = "Quota drained — switching to ${next.email}..."
+                    reconnectBanner.visibility = View.VISIBLE
+                    newUrl = performAccountSwitch(
+                        target = next,
+                        autoReason = reason ?: "quota_exhausted",
+                        alreadySwitched = false
+                    )
+                } else {
+                    Toast.makeText(
+                        this@AntigravityMainActivity,
+                        "Quota drained — no other available account to switch to",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            } finally {
+                hubViewModel.finishAccountSwitch(newUrl)
             }
         }
     }
@@ -1811,7 +1700,6 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
                 runCatching { WebViewCompat.removeWebMessageListener(webView, "AntigravityBridge") }
             }
-            webView.removeJavascriptInterface("AntigravityAndroid")
             (webView.parent as? ViewGroup)?.removeView(webView)
             webView.destroy()
         }

@@ -2,8 +2,8 @@
 set -euo pipefail
 umask 0022
 
-PREFIX="/data/data/com.agy.os/files/usr"
-HOME_DIR="/data/data/com.agy.os/files/home"
+PREFIX="${PREFIX:-/data/data/com.agy.os/files/usr}"
+HOME_DIR="${HOME:-/data/data/com.agy.os/files/home}"
 DPKG_BIN="$PREFIX/bin/dpkg"
 DPKG_REAL="$PREFIX/bin/dpkg.real"
 WRAP_PATH="$HOME_DIR/.agy_bridge/dpkg_wrap.sh"

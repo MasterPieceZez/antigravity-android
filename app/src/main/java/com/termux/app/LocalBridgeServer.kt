@@ -21,6 +21,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Lightweight pure-Kotlin HTTP bridge on 127.0.0.1:4401.
@@ -35,6 +36,7 @@ class LocalBridgeServer(
     private var serverSocket: ServerSocket? = null
     private var acceptJob: Job? = null
     private val clientSemaphore = Semaphore(16)
+    private val restartInFlight = AtomicBoolean(false)
     @Volatile
     private var listening = false
 
@@ -204,17 +206,30 @@ class LocalBridgeServer(
                     writeJson(out, 200, payload, reqOrigin)
                 }
                 method == "POST" && route == "/restart-agy" -> {
-                    val newUrl = AntigravityEngine.restartHub(context)
-                    if (newUrl != null) {
-                        val updateIntent = android.content.Intent("com.agy.os.ACTION_HUB_URL_UPDATED")
-                            .setPackage(context.packageName)
-                            .putExtra("hub_url", newUrl)
-                        runCatching { context.sendBroadcast(updateIntent) }
+                    if (!restartInFlight.compareAndSet(false, true)) {
+                        writeJson(
+                            out,
+                            409,
+                            JSONObject().put("ok", false).put("error", "restart_in_progress"),
+                            reqOrigin
+                        )
+                    } else {
+                        try {
+                            val newUrl = AntigravityEngine.restartHub(context)
+                            if (newUrl != null) {
+                                val updateIntent = android.content.Intent("com.agy.os.ACTION_HUB_URL_UPDATED")
+                                    .setPackage(context.packageName)
+                                    .putExtra("hub_url", newUrl)
+                                runCatching { context.sendBroadcast(updateIntent) }
+                            }
+                            val payload = JSONObject()
+                                .put("ok", newUrl != null)
+                                .put("hub_url", newUrl ?: JSONObject.NULL)
+                            writeJson(out, if (newUrl != null) 200 else 503, payload, reqOrigin)
+                        } finally {
+                            restartInFlight.set(false)
+                        }
                     }
-                    val payload = JSONObject()
-                        .put("ok", newUrl != null)
-                        .put("hub_url", newUrl ?: JSONObject.NULL)
-                    writeJson(out, if (newUrl != null) 200 else 503, payload, reqOrigin)
                 }
                 method == "POST" && route == "/notify" -> {
                     val json = runCatching { JSONObject(bodyBytes.toString(Charsets.UTF_8)) }
@@ -233,20 +248,21 @@ class LocalBridgeServer(
 
     private fun readUntilHeadersEnd(input: BufferedInputStream): ByteArray? {
         val baos = ByteArrayOutputStream()
-        var matched = 0
+        var prev3 = -1
+        var prev2 = -1
+        var prev1 = -1
         while (baos.size() < 16384) {
             val b = input.read()
             if (b == -1) return null
             baos.write(b)
-            matched = when {
-                matched == 0 && b == '\r'.code -> 1
-                matched == 1 && b == '\n'.code -> 2
-                matched == 2 && b == '\r'.code -> 3
-                matched == 3 && b == '\n'.code -> 4
-                b == '\r'.code -> 1
-                else -> 0
+            if ((prev1 == '\n'.code && b == '\n'.code) ||
+                (prev3 == '\r'.code && prev2 == '\n'.code && prev1 == '\r'.code && b == '\n'.code)
+            ) {
+                return baos.toByteArray()
             }
-            if (matched == 4) return baos.toByteArray()
+            prev3 = prev2
+            prev2 = prev1
+            prev1 = b
         }
         return null
     }
@@ -283,6 +299,7 @@ class LocalBridgeServer(
             400 -> "Bad Request"
             403 -> "Forbidden"
             404 -> "Not Found"
+            409 -> "Conflict"
             413 -> "Payload Too Large"
             501 -> "Not Implemented"
             else -> "Service Unavailable"
@@ -306,7 +323,7 @@ class LocalBridgeServer(
         private const val MAX_BODY_BYTES = 32768
 
         fun isAllowedHost(hostHeader: String?): Boolean {
-            if (hostHeader.isNullOrBlank()) return true
+            if (hostHeader.isNullOrBlank()) return false
             val cleaned = hostHeader.trim().lowercase()
             val port = AntigravityEngine.BRIDGE_PORT
             return cleaned == "127.0.0.1" ||

@@ -96,9 +96,10 @@ object AntigravityJsBridge {
             }
 
             function scheduleCheck() {
+                if (document.hidden && busySince === 0) return;
                 if (!checkScheduled) {
                     checkScheduled = true;
-                    setTimeout(checkState, 300);
+                    setTimeout(checkState, 600);
                 }
             }
 
@@ -111,7 +112,10 @@ object AntigravityJsBridge {
                 }
             }
             attachObserver();
-            setInterval(checkState, 2000);
+            setInterval(function() {
+                if (document.hidden && busySince === 0) return;
+                checkState();
+            }, 2000);
 
             // Quota exhaustion detection strictly from failed network responses (fetch & XHR)
             // to avoid false positives from chat text or rendered code snippets.

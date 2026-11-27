@@ -72,7 +72,8 @@ class AntigravityCoreTest {
         assertFalse(LocalBridgeServer.isAllowedOrigin("https://evil.example.com"))
         assertFalse(LocalBridgeServer.isAllowedOrigin("http://localhost.evil.com"))
 
-        assertTrue(LocalBridgeServer.isAllowedHost(null))
+        assertFalse(LocalBridgeServer.isAllowedHost(null))
+        assertFalse(LocalBridgeServer.isAllowedHost(""))
         assertTrue(LocalBridgeServer.isAllowedHost("127.0.0.1:4401"))
         assertTrue(LocalBridgeServer.isAllowedHost("localhost:4401"))
         assertTrue(LocalBridgeServer.isAllowedHost("localhost"))
@@ -156,14 +157,21 @@ class AntigravityCoreTest {
             assertEquals("alice@example.com", mgr.getActiveEmail())
             assertTrue(primaryToken.readText().contains("tok_a"))
 
-            // Auto-failover when Alice's quota is exhausted -> picks Bob
-            val next = mgr.markCurrentQuotaExhaustedAndPickNext(cooldownMs = 60_000L)
+            // Auto-failover when Alice's quota is exhausted -> selects Bob without overwriting active token yet
+            val next = mgr.markCurrentQuotaExhaustedAndSelectNext(cooldownMs = 60_000L)
             assertNotNull(next)
             assertEquals("bob@example.com", next!!.email)
+            assertEquals("alice@example.com", mgr.getActiveEmail())
+            assertTrue(primaryToken.readText().contains("tok_a"))
+
+            // Caller stops Hub first, then switches credentials
+            val switchedToBob = mgr.switchToAccount(next.id, clearCooldown = false)
+            assertNotNull(switchedToBob)
             assertEquals("bob@example.com", mgr.getActiveEmail())
+            assertTrue(primaryToken.readText().contains("tok_b"))
 
             // If Bob also drains while Alice is in cooldown -> returns null (prevents loop)
-            val none = mgr.markCurrentQuotaExhaustedAndPickNext(cooldownMs = 60_000L)
+            val none = mgr.markCurrentQuotaExhaustedAndSelectNext(cooldownMs = 60_000L)
             assertNull(none)
         } finally {
             tempHome.deleteRecursively()
@@ -343,22 +351,33 @@ class AntigravityCoreTest {
     }
 
     @Test
-    fun engine_replaceSameLengthInFile_handlesChunkBoundary() {
-        val f = tempFolder.newFile("boundary.bin")
-        val chunkSize = 1024 * 1024
-        val prefix = ByteArray(chunkSize - 5) { 'A'.code.toByte() }
-        val target = "ineligible".toByteArray(Charsets.US_ASCII)
-        val suffix = ByteArray(128) { 'Z'.code.toByte() }
-        f.writeBytes(prefix + target + suffix)
+    fun hubViewModel_enforcesAtomicStateTransitions() {
+        val vm = AntigravityHubViewModel()
+        assertFalse(vm.tryBeginReconnect())
 
-        val changed = AntigravityEngine.replaceSameLengthInFile(
-            f,
-            "ineligible".toByteArray(Charsets.US_ASCII),
-            "inexigible".toByteArray(Charsets.US_ASCII)
-        )
-        assertTrue(changed)
-        val result = f.readBytes()
-        assertEquals(prefix.size + target.size + suffix.size, result.size)
-        assertEquals("inexigible", String(result, prefix.size, target.size, Charsets.US_ASCII))
+        vm.markBootstrapComplete()
+        assertTrue(vm.tryBeginBoot())
+        assertFalse(vm.tryBeginBoot())
+        assertFalse(vm.tryBeginReconnect())
+
+        vm.finishBoot("http://localhost:4400/#t=abc")
+        assertEquals(HubPhase.Running("http://localhost:4400/#t=abc"), vm.currentState.phase)
+        assertTrue(vm.tryBeginReconnect())
+        assertFalse(vm.tryBeginReconnect())
+        vm.finishReconnect("http://localhost:4400/#t=def")
+        assertEquals("http://localhost:4400/#t=def", vm.currentState.currentHubUrl)
+
+        assertTrue(vm.tryBeginQuotaFailover(nowMs = 20_000L))
+        assertFalse(vm.tryBeginAccountSwitch())
+        assertFalse(vm.tryBeginQuotaFailover(nowMs = 25_000L))
+        vm.finishAccountSwitch("http://localhost:4400/#t=ghi")
+        assertFalse(vm.currentState.isSwitchingAccount)
+        assertFalse(vm.tryBeginQuotaFailover(nowMs = 25_000L))
+        assertTrue(vm.tryBeginQuotaFailover(nowMs = 40_000L))
+        vm.finishAccountSwitch(null)
+
+        assertEquals(1, vm.recordRenderCrash(10_000L))
+        assertEquals(2, vm.recordRenderCrash(15_000L))
+        assertEquals(1, vm.recordRenderCrash(40_000L))
     }
 }

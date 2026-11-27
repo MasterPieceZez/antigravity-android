@@ -1,8 +1,8 @@
 #!/data/data/com.agy.os/files/usr/bin/bash
 set -u
 
-export PREFIX="/data/data/com.agy.os/files/usr"
-export HOME="/data/data/com.agy.os/files/home"
+export PREFIX="${PREFIX:-/data/data/com.agy.os/files/usr}"
+export HOME="${HOME:-/data/data/com.agy.os/files/home}"
 export PATH="$HOME/.local/bin:$PREFIX/bin:$PATH"
 export TMPDIR="$PREFIX/tmp"
 export TERM="xterm-256color"

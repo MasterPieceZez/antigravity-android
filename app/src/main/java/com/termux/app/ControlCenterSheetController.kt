@@ -38,7 +38,6 @@ class ControlCenterSheetController(
         fun onSendTestNotification()
         fun onAddAccount()
         fun onSwitchAccount(account: AccountProfile)
-        fun onToggleRegionBypass(enabled: Boolean)
         fun onReloadWebView()
         fun onRestartHub()
         fun onToggleTerminal()
@@ -73,13 +72,6 @@ class ControlCenterSheetController(
         switchAutoSwitch.isChecked = accountManager.isAutoSwitchEnabled(activity)
         switchAutoSwitch.setOnCheckedChangeListener { _, checked ->
             accountManager.setAutoSwitchEnabled(activity, checked)
-        }
-
-        val switchRegionBypass = view.findViewById<Switch>(R.id.switch_region_bypass)
-        switchRegionBypass.isChecked = AntigravityEngine.isRegionBypassEnabled(activity)
-        switchRegionBypass.setOnCheckedChangeListener { _, checked ->
-            dialog.dismiss()
-            callbacks.onToggleRegionBypass(checked)
         }
         btnAddAccount.setOnClickListener {
             dialog.dismiss()

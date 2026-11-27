@@ -6,7 +6,7 @@ if [ -z "$URL" ]; then
     exit 0
 fi
 
-HOME_DIR="/data/data/com.agy.os/files/home"
+HOME_DIR="${HOME:-/data/data/com.agy.os/files/home}"
 BRIDGE_DIR="$HOME_DIR/.agy_bridge"
 mkdir -p "$BRIDGE_DIR"
 

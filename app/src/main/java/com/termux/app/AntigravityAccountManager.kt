@@ -242,10 +242,11 @@ class AntigravityAccountManager(
     }
 
     /**
-     * Marks the current active account as quota-exhausted and picks the best available
-     * fallback account (if any). Returns null if no other eligible account exists.
+     * Marks the current active account as quota-exhausted and selects the best available
+     * fallback account (if any) without swapping active credential files on disk.
+     * Callers should stop the Hub process before calling [switchToAccount].
      */
-    fun markCurrentQuotaExhaustedAndPickNext(
+    fun markCurrentQuotaExhaustedAndSelectNext(
         cooldownMs: Long = DEFAULT_QUOTA_COOLDOWN_MS
     ): AccountProfile? = synchronized(lock) {
         val current = captureActiveAccountLockedIfPresent() ?: return null
@@ -269,10 +270,23 @@ class AntigravityAccountManager(
 
         // Prefer accounts whose cooldown has expired; if none, return null so we don't thrash
         val ready = candidates.filter { !it.isInCooldown(now) }
-        val chosen = ready.minWithOrNull(
+        return ready.minWithOrNull(
             compareBy<AccountProfile> { it.quotaExhaustedAt }.thenByDescending { it.lastUsedAt }
-        ) ?: return null
+        )
+    }
 
+    /**
+     * Marks the current active account as quota-exhausted and immediately switches to the
+     * best available fallback account.
+     */
+    @Deprecated(
+        message = "Use markCurrentQuotaExhaustedAndSelectNext() and switchToAccount() after stopping the Hub",
+        replaceWith = ReplaceWith("markCurrentQuotaExhaustedAndSelectNext(cooldownMs)")
+    )
+    fun markCurrentQuotaExhaustedAndPickNext(
+        cooldownMs: Long = DEFAULT_QUOTA_COOLDOWN_MS
+    ): AccountProfile? {
+        val chosen = markCurrentQuotaExhaustedAndSelectNext(cooldownMs) ?: return null
         return switchToAccount(chosen.id, clearCooldown = false)
     }
 

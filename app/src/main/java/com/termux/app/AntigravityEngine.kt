@@ -50,25 +50,32 @@ data class PendingNotification(
 )
 
 object AntigravityEngine {
-    const val FILES_DIR = "/data/data/com.agy.os/files"
-    const val PREFIX_DIR = "$FILES_DIR/usr"
-    const val HOME_DIR = "$FILES_DIR/home"
-    const val BRIDGE_DIR = "$HOME_DIR/.agy_bridge"
-    const val AGY_BIN = "$HOME_DIR/.local/bin/agy"
-    private const val PREFS_ENGINE = "antigravity_prefs"
-    private const val KEY_REGION_BYPASS = "region_eligibility_bypass"
-    private val BYTES_INELIGIBLE = "ineligible".toByteArray(Charsets.US_ASCII)
-    private val BYTES_INEXIGIBLE = "inexigible".toByteArray(Charsets.US_ASCII)
-    const val AGY_LOG = "$BRIDGE_DIR/agy.log"
-    const val INSTALL_LOG = "$BRIDGE_DIR/install.log"
-    const val HUB_URL_FILE = "$BRIDGE_DIR/hub.url"
-    const val HUB_PID_FILE = "$BRIDGE_DIR/hub.pid"
-    const val NOTIFY_FILE = "$BRIDGE_DIR/pending_notify.json"
-    const val PENDING_OPEN_URL_FILE = "$BRIDGE_DIR/pending_open_url"
-    const val TOKEN_FILE = "$BRIDGE_DIR/bridge.token"
-    const val BASH_BIN = "$PREFIX_DIR/bin/bash"
+    private const val DEFAULT_FILES_DIR = "/data/data/com.agy.os/files"
+    @Volatile
+    var FILES_DIR: String = DEFAULT_FILES_DIR
+        private set
+
+    val PREFIX_DIR: String get() = "$FILES_DIR/usr"
+    val HOME_DIR: String get() = "$FILES_DIR/home"
+    val BRIDGE_DIR: String get() = "$HOME_DIR/.agy_bridge"
+    val AGY_BIN: String get() = "$HOME_DIR/.local/bin/agy"
+    val AGY_LOG: String get() = "$BRIDGE_DIR/agy.log"
+    val INSTALL_LOG: String get() = "$BRIDGE_DIR/install.log"
+    val HUB_URL_FILE: String get() = "$BRIDGE_DIR/hub.url"
+    val HUB_PID_FILE: String get() = "$BRIDGE_DIR/hub.pid"
+    val NOTIFY_FILE: String get() = "$BRIDGE_DIR/pending_notify.json"
+    val PENDING_OPEN_URL_FILE: String get() = "$BRIDGE_DIR/pending_open_url"
+    val TOKEN_FILE: String get() = "$BRIDGE_DIR/bridge.token"
+    val BASH_BIN: String get() = "$PREFIX_DIR/bin/bash"
     const val HUB_PORT = 4400
     const val BRIDGE_PORT = 4401
+
+    fun initPaths(context: Context) {
+        val dir = context.filesDir?.absolutePath
+        if (!dir.isNullOrBlank()) {
+            FILES_DIR = dir
+        }
+    }
 
     private val startMutex = Mutex()
     private val restartMutex = Mutex()
@@ -745,6 +752,7 @@ object AntigravityEngine {
                     IllegalStateException("Unsupported device ABI ($abi). Google Antigravity CLI requires a 64-bit arm64-v8a or x86_64 Android device.")
                 )
             }
+            initPaths(context)
             if (!hasInternetConnection(context)) {
                 return@withContext Result.failure(
                     IllegalStateException("No internet connection. Please connect to Wi-Fi or mobile data and try again.")
@@ -764,18 +772,32 @@ object AntigravityEngine {
                 export DEBIAN_FRONTEND=noninteractive
                 export APT_LISTCHANGES_FRONTEND=none
                 INSTALL_SH="${'$'}TMPDIR/agy_install.sh"
+                INSTALL_LOG="${'$'}HOME/.agy_bridge/install.log"
+                mkdir -p "${'$'}HOME/.agy_bridge"
                 trap 'rm -f "${'$'}INSTALL_SH"' EXIT
-                if ! command -v curl >/dev/null 2>&1; then
+                fetch_installer() {
+                    curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time "${'$'}1" --retry 3 --retry-all-errors -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh 2>/dev/null || \
+                    curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time "${'$'}1" --retry 3 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh
+                }
+                if ! command -v curl >/dev/null 2>&1 || ! fetch_installer 60; then
                     dpkg --configure -a >/dev/null 2>&1 || true
                     apt-get update -y
                     apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" curl libcurl libngtcp2 libnghttp3 libnghttp2 libssh2 openssl zlib ca-certificates
+                    fetch_installer 180
                 fi
-                curl -fsSL --retry 2 --retry-delay 2 --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 180 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh
                 if [ ! -s "${'$'}INSTALL_SH" ] || ! head -n 1 "${'$'}INSTALL_SH" | grep -q '^#!'; then
                     echo "Downloaded installer script failed basic sanity check" >&2
                     exit 1
                 fi
+                if command -v sha256sum >/dev/null 2>&1; then
+                    SH_HASH=$(sha256sum "${'$'}INSTALL_SH" | awk '{print $1}')
+                    printf '[%s] install.sh sha256=%s\n' "$(date -Iseconds 2>/dev/null || date)" "${'$'}SH_HASH" >> "${'$'}INSTALL_LOG"
+                fi
                 bash "${'$'}INSTALL_SH"
+                if [ -f "${'$'}HOME/.local/bin/agy" ] && command -v sha256sum >/dev/null 2>&1; then
+                    BIN_HASH=$(sha256sum "${'$'}HOME/.local/bin/agy" | awk '{print $1}')
+                    printf '[%s] agy sha256=%s\n' "$(date -Iseconds 2>/dev/null || date)" "${'$'}BIN_HASH" >> "${'$'}INSTALL_LOG"
+                fi
             """.trimIndent()
             val setsidBin = File("$PREFIX_DIR/bin/setsid")
             val wrappedScript = "echo \"__AGY_INSTALL_PID__=$$\"\n$script"
@@ -821,9 +843,6 @@ object AntigravityEngine {
             val code = proc.waitFor()
             if (code == 0 && isAgyInstalled()) {
                 provisionBridgeAssets(context)
-                if (isRegionBypassEnabled(context)) {
-                    applyRegionEligibilityPatch(true)
-                }
                 onStatus(100, "Antigravity CLI installed!")
                 Result.success(Unit)
             } else {
@@ -948,161 +967,6 @@ object AntigravityEngine {
             delay(50L)
         }
         cachedHubListening = false
-    }
-
-    fun isRegionBypassEnabled(context: Context): Boolean {
-        return context.getSharedPreferences(PREFS_ENGINE, Context.MODE_PRIVATE)
-            .getBoolean(KEY_REGION_BYPASS, false)
-    }
-
-    fun setRegionBypassEnabled(context: Context, enabled: Boolean) {
-        context.getSharedPreferences(PREFS_ENGINE, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(KEY_REGION_BYPASS, enabled)
-            .apply()
-    }
-
-    private fun isSymbolicLink(file: File): Boolean {
-        return runCatching {
-            OsConstants.S_ISLNK(Os.lstat(file.absolutePath).st_mode)
-        }.getOrDefault(false)
-    }
-
-    private fun findRegionPatchTargets(): List<File> {
-        val targets = LinkedHashMap<String, File>()
-        val agy = File(AGY_BIN)
-        if (agy.isFile && agy.length() > 4096L && !isSymbolicLink(agy)) {
-            val canon = runCatching { agy.canonicalPath }.getOrDefault(agy.absolutePath)
-            targets[canon] = agy
-        }
-        for (base in listOf("$HOME_DIR/.local", "$HOME_DIR/.antigravity")) {
-            val dir = File(base)
-            if (!dir.isDirectory) continue
-            dir.walkTopDown().maxDepth(5).forEach { f ->
-                if (f.isFile && f.length() > 4096L && !isSymbolicLink(f) &&
-                    (f.name == "agy" || f.name.startsWith("language_server"))
-                ) {
-                    val canon = runCatching { f.canonicalPath }.getOrDefault(f.absolutePath)
-                    targets.putIfAbsent(canon, f)
-                }
-            }
-        }
-        return targets.values.toList()
-    }
-
-    private fun indexOfBytes(haystack: ByteArray, length: Int, needle: ByteArray, start: Int = 0): Int {
-        val limit = length - needle.size
-        var i = start
-        while (i <= limit) {
-            var match = true
-            for (j in needle.indices) {
-                if (haystack[i + j] != needle[j]) {
-                    match = false
-                    break
-                }
-            }
-            if (match) return i
-            i++
-        }
-        return -1
-    }
-
-    private fun readFullChunk(input: java.io.InputStream, buf: ByteArray, offset: Int, maxLen: Int): Int {
-        var total = 0
-        while (total < maxLen) {
-            val n = input.read(buf, offset + total, maxLen - total)
-            if (n <= 0) break
-            total += n
-        }
-        return total
-    }
-
-    internal fun replaceSameLengthInFile(file: File, from: ByteArray, to: ByteArray): Boolean {
-        if (!file.isFile || from.size != to.size || from.isEmpty()) return false
-        val chunkSize = 1024 * 1024
-        val overlap = from.size - 1
-        val buf = ByteArray(chunkSize + overlap)
-        var found = false
-
-        file.inputStream().use { input ->
-            var carry = 0
-            while (true) {
-                val read = readFullChunk(input, buf, carry, chunkSize)
-                if (read <= 0) break
-                val total = carry + read
-                if (indexOfBytes(buf, total, from) >= 0) {
-                    found = true
-                    break
-                }
-                if (read < chunkSize) break
-                if (total >= overlap) {
-                    System.arraycopy(buf, total - overlap, buf, 0, overlap)
-                    carry = overlap
-                } else {
-                    carry = total
-                }
-            }
-        }
-        if (!found) return false
-
-        val pid = runCatching { Os.getpid() }.getOrDefault(0)
-        val tmp = File(file.parentFile, "${file.name}.agypatch.$pid.tmp")
-        var patched = false
-        try {
-            val origMode = runCatching { Os.stat(file.absolutePath).st_mode and 0b111111111111 }.getOrDefault(0b111101101)
-            file.inputStream().use { input ->
-                tmp.outputStream().use { output ->
-                    var carry = 0
-                    while (true) {
-                        val read = readFullChunk(input, buf, carry, chunkSize)
-                        if (read <= 0) break
-                        val total = carry + read
-                        var pos = 0
-                        while (pos <= total - from.size) {
-                            val idx = indexOfBytes(buf, total, from, pos)
-                            if (idx < 0) break
-                            System.arraycopy(to, 0, buf, idx, to.size)
-                            patched = true
-                            pos = idx + to.size
-                        }
-                        val emitLen = if (read < chunkSize) total else (total - overlap).coerceAtLeast(0)
-                        if (emitLen > 0) {
-                            output.write(buf, 0, emitLen)
-                        }
-                        val rem = total - emitLen
-                        if (rem > 0) {
-                            System.arraycopy(buf, emitLen, buf, 0, rem)
-                        }
-                        carry = rem
-                    }
-                    if (carry > 0) {
-                        output.write(buf, 0, carry)
-                    }
-                    output.flush()
-                }
-            }
-            runCatching { Os.chmod(tmp.absolutePath, origMode) }
-            if (!tmp.renameTo(file)) {
-                tmp.delete()
-                return false
-            }
-            return patched
-        } catch (_: Exception) {
-            runCatching { tmp.delete() }
-            return false
-        }
-    }
-
-    suspend fun applyRegionEligibilityPatch(enable: Boolean): Boolean = withContext(Dispatchers.IO) {
-        val from = if (enable) BYTES_INELIGIBLE else BYTES_INEXIGIBLE
-        val to = if (enable) BYTES_INEXIGIBLE else BYTES_INELIGIBLE
-        var anyPatched = false
-        for (target in findRegionPatchTargets()) {
-            if (replaceSameLengthInFile(target, from, to)) {
-                anyPatched = true
-            }
-        }
-        anyPatched
     }
 
     @JvmStatic

@@ -358,8 +358,8 @@ public final class TermuxConstants {
     public static final String TERMUX_GITHUB_REPO_URL = "https://github.com/MasterPieceZez/" + TERMUX_GITHUB_REPO_NAME; // Default: "https://github.com/termux/termux-app"
     /** Termux GitHub issues repo url */
     public static final String TERMUX_GITHUB_ISSUES_REPO_URL = TERMUX_GITHUB_REPO_URL + "/issues"; // Default: "https://github.com/termux/termux-app/issues"
-    /** Termux F-Droid package url */
-    public static final String TERMUX_FDROID_PACKAGE_URL = FDROID_PACKAGES_BASE_URL + "/" + TERMUX_PACKAGE_NAME; // Default: "https://f-droid.org/en/packages/com.termux"
+    /** Termux release distribution url (no F-Droid listing for com.agy.os) */
+    public static final String TERMUX_FDROID_PACKAGE_URL = TERMUX_GITHUB_REPO_URL + "/releases"; // Default: "https://f-droid.org/en/packages/com.termux"
 
 
     /** Termux:API app name */

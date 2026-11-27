@@ -173,16 +173,6 @@
                 android:text="Auto-switch account when quota drains"
                 android:textColor="@color/agy_text_primary"
                 android:textSize="13sp" />
-
-            <Switch
-                android:id="@+id/switch_region_bypass"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:checked="false"
-                android:text="Region eligibility bypass (patch)"
-                android:textColor="@color/agy_text_primary"
-                android:textSize="13sp" />
         </LinearLayout>
 
         <!-- Quick Actions -->
