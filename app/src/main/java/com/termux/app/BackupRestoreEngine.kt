@@ -472,6 +472,27 @@ object BackupRestoreEngine {
             if (!operationInProgress.compareAndSet(false, true)) {
                 return@async Result.failure(IllegalStateException("Another backup or restore is already running"))
             }
+            val report: (Int, String) -> Unit = { pct, msg ->
+                _progressFlow.value = pct to msg
+                onProgress(pct, msg)
+            }
+            val tempFile = File(appCtx.cacheDir, "import_backup.tar.zst")
+            try {
+                val neededCache = if (expectedBytes > 0L) expectedBytes + MIN_RESTORE_FREE_BYTES else MIN_RESTORE_FREE_BYTES
+                val cacheAvail = runCatching { StatFs(appCtx.cacheDir.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
+                if (cacheAvail < neededCache) {
+                    return@async Result.failure(
+                        IllegalStateException("Not enough free internal storage in cache to stage backup")
+                    )
+                }
+                report(2, "Copying $displayName...")
+                val input = inputStreamProvider() ?: return@async Result.failure(
+                    IllegalStateException("Unable to open selected file")
+                )
+                var copied = 0L
+                input.use { src ->
+                    tempFile.outputStream().use { dst ->
+                        val buf = ByteArray(128 * 1024)
                         while (true) {
                             currentCoroutineContext().ensureActive()
                             val n = src.read(buf)
