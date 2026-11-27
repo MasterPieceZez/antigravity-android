@@ -394,4 +394,46 @@ class AntigravityCoreTest {
         assertEquals("", AntigravityEngine.formatCurlSpeed("0"))
         assertNull(AntigravityEngine.parseCurlProgressLine("Installing antigravity CLI..."))
     }
+
+    @Test
+    fun engine_replaceSameLengthInFile_handlesChunkBoundary() {
+        val f = tempFolder.newFile("boundary.bin")
+        val chunkSize = 1024 * 1024
+        val prefix = ByteArray(chunkSize - 5) { 'A'.code.toByte() }
+        val target = "ineligible".toByteArray(Charsets.US_ASCII)
+        val suffix = ByteArray(128) { 'Z'.code.toByte() }
+        f.writeBytes(prefix + target + suffix)
+
+        val changed = AntigravityEngine.replaceSameLengthInFile(
+            f,
+            "ineligible".toByteArray(Charsets.US_ASCII),
+            "inexigible".toByteArray(Charsets.US_ASCII)
+        )
+        assertTrue(changed)
+        val result = f.readBytes()
+        assertEquals(prefix.size + target.size + suffix.size, result.size)
+        assertEquals("inexigible", String(result, prefix.size, target.size, Charsets.US_ASCII))
+    }
+
+    @Test
+    fun inAppUpdater_parsesSha256Checksums() {
+        val hash1 = "6e44a509ca7d29d93e249ab4bc167c142c6bac23606e21db8deaa5b41a671500"
+        val hash2 = "CBC66F34C65F698A64446E8DF8C08ACA6E27FC432ED75606C1930EBC4D80E73A"
+        val checksums = """
+            $hash1  AntigravityStandalone-v1.1.1-arm64-v8a.apk
+            $hash2 *AntigravityUpdate-v1.1.1-universal-lite.apk
+            not-a-valid-hash  broken.apk
+        """.trimIndent()
+
+        assertEquals(
+            hash1,
+            InAppUpdater.parseSha256ForAsset(checksums, "AntigravityStandalone-v1.1.1-arm64-v8a.apk")
+        )
+        assertEquals(
+            hash2.lowercase(),
+            InAppUpdater.parseSha256ForAsset(checksums, "AntigravityUpdate-v1.1.1-universal-lite.apk")
+        )
+        assertNull(InAppUpdater.parseSha256ForAsset(checksums, "nonexistent.apk"))
+        assertNull(InAppUpdater.parseSha256ForAsset(checksums, "broken.apk"))
+    }
 }

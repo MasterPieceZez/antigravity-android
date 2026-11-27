@@ -38,6 +38,8 @@ class ControlCenterSheetController(
         fun onSendTestNotification()
         fun onAddAccount()
         fun onSwitchAccount(account: AccountProfile)
+        fun onToggleRegionBypass(enabled: Boolean, onReverted: () -> Unit)
+        fun onStartInAppUpdate(info: UpdateReleaseInfo)
         fun onReloadWebView()
         fun onRestartHub()
         fun onToggleTerminal()
@@ -72,6 +74,30 @@ class ControlCenterSheetController(
         switchAutoSwitch.isChecked = accountManager.isAutoSwitchEnabled(activity)
         switchAutoSwitch.setOnCheckedChangeListener { _, checked ->
             accountManager.setAutoSwitchEnabled(activity, checked)
+        }
+
+        val switchRegionBypass = view.findViewById<Switch>(R.id.switch_region_bypass)
+        switchRegionBypass.isChecked = AntigravityEngine.isRegionBypassEnabled(activity)
+        switchRegionBypass.setOnCheckedChangeListener { _, checked ->
+            if (checked) {
+                callbacks.onToggleRegionBypass(true) {
+                    switchRegionBypass.setOnCheckedChangeListener(null)
+                    switchRegionBypass.isChecked = false
+                    switchRegionBypass.setOnCheckedChangeListener { _, innerChecked ->
+                        if (innerChecked) {
+                            callbacks.onToggleRegionBypass(true) {
+                                dialog.dismiss()
+                            }
+                        } else {
+                            dialog.dismiss()
+                            callbacks.onToggleRegionBypass(false) {}
+                        }
+                    }
+                }
+            } else {
+                dialog.dismiss()
+                callbacks.onToggleRegionBypass(false) {}
+            }
         }
         btnAddAccount.setOnClickListener {
             dialog.dismiss()
@@ -193,17 +219,21 @@ class ControlCenterSheetController(
                 res.onSuccess { info ->
                     val current = "v${BuildConfig.VERSION_NAME}"
                     if (info.tagName.isNotBlank() && AntigravityEngine.isNewerVersion(info.tagName, current)) {
-                        val dlUrl = info.downloadApkUrl ?: info.releaseUrl
                         val msg = if (info.isLiteApk) {
-                            "Installed: $current\nLatest: ${info.tagName}\n\nDownload the lightweight universal-lite updater APK?"
+                            "Installed: $current\nLatest: ${info.tagName}\n\nDownload and install the lightweight universal-lite update?"
                         } else {
-                            "Installed: $current\nLatest: ${info.tagName}\n\nDownload the updated APK from GitHub Releases?"
+                            "Installed: $current\nLatest: ${info.tagName}\n\nDownload and install the updated APK from GitHub Releases?"
                         }
                         AlertDialog.Builder(activity)
                             .setTitle("Update Available (${info.tagName})")
                             .setMessage(msg)
-                            .setPositiveButton("Download") { _, _ ->
-                                runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dlUrl))) }
+                            .setPositiveButton("Download & Install") { _, _ ->
+                                dialog.dismiss()
+                                if (info.downloadApkUrl != null) {
+                                    callbacks.onStartInAppUpdate(info)
+                                } else {
+                                    runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.releaseUrl))) }
+                                }
                             }
                             .setNegativeButton("Later", null)
                             .show()

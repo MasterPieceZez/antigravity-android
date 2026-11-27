@@ -34,4 +34,4 @@ Then open Antigravity and choose **Import Backup / Port Termux (.tar.zst)**. Pat
 
 ## License
 - **GPL-3.0**, forked from [termux/termux-app](https://github.com/termux/termux-app).
-- Built with AI assistance and tested on real hardware (POCO X3 NFC, Android 12 / MIUI 14).
+- Built with AI assistance and tested on real hardware (POCO X3 NFC, POCO X3 GT, POCO X6 PRO, Samsung Galaxy A55, Samsung Galaxy A36).

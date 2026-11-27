@@ -41,7 +41,9 @@ data class UpdateReleaseInfo(
     val tagName: String,
     val releaseUrl: String,
     val downloadApkUrl: String?,
-    val isLiteApk: Boolean = false
+    val isLiteApk: Boolean = false,
+    val apkFileName: String? = null,
+    val checksumsUrl: String? = null
 )
 
 data class PendingNotification(
@@ -59,6 +61,10 @@ object AntigravityEngine {
     val HOME_DIR: String get() = "$FILES_DIR/home"
     val BRIDGE_DIR: String get() = "$HOME_DIR/.agy_bridge"
     val AGY_BIN: String get() = "$HOME_DIR/.local/bin/agy"
+    private const val PREFS_ENGINE = "antigravity_prefs"
+    private const val KEY_REGION_BYPASS = "region_eligibility_bypass"
+    private val BYTES_INELIGIBLE = "ineligible".toByteArray(Charsets.US_ASCII)
+    private val BYTES_INEXIGIBLE = "inexigible".toByteArray(Charsets.US_ASCII)
     val AGY_LOG: String get() = "$BRIDGE_DIR/agy.log"
     val INSTALL_LOG: String get() = "$BRIDGE_DIR/install.log"
     val HUB_URL_FILE: String get() = "$BRIDGE_DIR/hub.url"
@@ -380,28 +386,65 @@ object AntigravityEngine {
             val htmlUrl = json.optString("html_url", "https://github.com/MasterPieceZez/antigravity-android/releases")
             val primaryAbi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
             var universalLiteUrl: String? = null
+            var universalLiteName: String? = null
             var abiLiteUrl: String? = null
+            var abiLiteName: String? = null
             var abiStandaloneUrl: String? = null
+            var abiStandaloneName: String? = null
             var universalStandaloneUrl: String? = null
+            var universalStandaloneName: String? = null
+            var checksumsUrl: String? = null
             val assets = json.optJSONArray("assets")
             if (assets != null) {
                 for (i in 0 until assets.length()) {
                     val a = assets.optJSONObject(i) ?: continue
                     val name = a.optString("name", "")
-                    if (!name.endsWith(".apk", ignoreCase = true)) continue
                     val dlUrl = a.optString("browser_download_url", "").ifBlank { null } ?: continue
+                    if (name.equals("SHA256SUMS.txt", ignoreCase = true)) {
+                        checksumsUrl = dlUrl
+                        continue
+                    }
+                    if (!name.endsWith(".apk", ignoreCase = true)) continue
                     val lower = name.lowercase()
                     when {
-                        lower.contains("universal") && lower.contains("lite") -> universalLiteUrl = dlUrl
-                        lower.contains(primaryAbi.lowercase()) && lower.contains("lite") -> abiLiteUrl = dlUrl
-                        lower.contains(primaryAbi.lowercase()) -> abiStandaloneUrl = dlUrl
-                        lower.contains("universal") -> universalStandaloneUrl = dlUrl
+                        lower.contains("universal") && lower.contains("lite") -> {
+                            universalLiteUrl = dlUrl
+                            universalLiteName = name
+                        }
+                        lower.contains(primaryAbi.lowercase()) && lower.contains("lite") -> {
+                            abiLiteUrl = dlUrl
+                            abiLiteName = name
+                        }
+                        lower.contains(primaryAbi.lowercase()) -> {
+                            abiStandaloneUrl = dlUrl
+                            abiStandaloneName = name
+                        }
+                        lower.contains("universal") -> {
+                            universalStandaloneUrl = dlUrl
+                            universalStandaloneName = name
+                        }
                     }
                 }
             }
             val bestLite = universalLiteUrl ?: abiLiteUrl
             val bestApk = bestLite ?: abiStandaloneUrl ?: universalStandaloneUrl
-            Result.success(UpdateReleaseInfo(tag, htmlUrl, bestApk, isLiteApk = bestLite != null))
+            val bestName = when (bestApk) {
+                universalLiteUrl -> universalLiteName
+                abiLiteUrl -> abiLiteName
+                abiStandaloneUrl -> abiStandaloneName
+                universalStandaloneUrl -> universalStandaloneName
+                else -> null
+            }
+            Result.success(
+                UpdateReleaseInfo(
+                    tagName = tag,
+                    releaseUrl = htmlUrl,
+                    downloadApkUrl = bestApk,
+                    isLiteApk = bestLite != null,
+                    apkFileName = bestName,
+                    checksumsUrl = checksumsUrl
+                )
+            )
         } catch (e: Exception) {
             Result.failure(e)
         } finally {
@@ -912,6 +955,9 @@ EOF
             val code = proc.waitFor()
             if (code == 0 && isAgyInstalled()) {
                 provisionBridgeAssets(context)
+                if (isRegionBypassEnabled(context)) {
+                    applyRegionEligibilityPatch(true)
+                }
                 onStatus(100, "Antigravity CLI installed!")
                 Result.success(Unit)
             } else {
@@ -1070,6 +1116,161 @@ EOF
         if (!parts[9].contains(':')) return null
         val speed = formatCurlSpeed(parts[11]).ifEmpty { formatCurlSpeed(parts[6]) }
         return pct to speed
+    }
+
+    fun isRegionBypassEnabled(context: Context): Boolean {
+        return context.getSharedPreferences(PREFS_ENGINE, Context.MODE_PRIVATE)
+            .getBoolean(KEY_REGION_BYPASS, false)
+    }
+
+    fun setRegionBypassEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS_ENGINE, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_REGION_BYPASS, enabled)
+            .apply()
+    }
+
+    private fun isSymbolicLink(file: File): Boolean {
+        return runCatching {
+            OsConstants.S_ISLNK(Os.lstat(file.absolutePath).st_mode)
+        }.getOrDefault(false)
+    }
+
+    private fun findRegionPatchTargets(): List<File> {
+        val targets = LinkedHashMap<String, File>()
+        val agy = File(AGY_BIN)
+        if (agy.isFile && agy.length() > 4096L && !isSymbolicLink(agy)) {
+            val canon = runCatching { agy.canonicalPath }.getOrDefault(agy.absolutePath)
+            targets[canon] = agy
+        }
+        for (base in listOf("$HOME_DIR/.local", "$HOME_DIR/.antigravity")) {
+            val dir = File(base)
+            if (!dir.isDirectory) continue
+            dir.walkTopDown().maxDepth(5).forEach { f ->
+                if (f.isFile && f.length() > 4096L && !isSymbolicLink(f) &&
+                    (f.name == "agy" || f.name.startsWith("language_server"))
+                ) {
+                    val canon = runCatching { f.canonicalPath }.getOrDefault(f.absolutePath)
+                    targets.putIfAbsent(canon, f)
+                }
+            }
+        }
+        return targets.values.toList()
+    }
+
+    private fun indexOfBytes(haystack: ByteArray, length: Int, needle: ByteArray, start: Int = 0): Int {
+        val limit = length - needle.size
+        var i = start
+        while (i <= limit) {
+            var match = true
+            for (j in needle.indices) {
+                if (haystack[i + j] != needle[j]) {
+                    match = false
+                    break
+                }
+            }
+            if (match) return i
+            i++
+        }
+        return -1
+    }
+
+    private fun readFullChunk(input: java.io.InputStream, buf: ByteArray, offset: Int, maxLen: Int): Int {
+        var total = 0
+        while (total < maxLen) {
+            val n = input.read(buf, offset + total, maxLen - total)
+            if (n <= 0) break
+            total += n
+        }
+        return total
+    }
+
+    internal fun replaceSameLengthInFile(file: File, from: ByteArray, to: ByteArray): Boolean {
+        if (!file.isFile || from.size != to.size || from.isEmpty()) return false
+        val chunkSize = 1024 * 1024
+        val overlap = from.size - 1
+        val buf = ByteArray(chunkSize + overlap)
+        var found = false
+
+        file.inputStream().use { input ->
+            var carry = 0
+            while (true) {
+                val read = readFullChunk(input, buf, carry, chunkSize)
+                if (read <= 0) break
+                val total = carry + read
+                if (indexOfBytes(buf, total, from) >= 0) {
+                    found = true
+                    break
+                }
+                if (read < chunkSize) break
+                if (total >= overlap) {
+                    System.arraycopy(buf, total - overlap, buf, 0, overlap)
+                    carry = overlap
+                } else {
+                    carry = total
+                }
+            }
+        }
+        if (!found) return false
+
+        val pid = runCatching { Os.getpid() }.getOrDefault(0)
+        val tmp = File(file.parentFile, "${file.name}.agypatch.$pid.tmp")
+        var patched = false
+        try {
+            val origMode = runCatching { Os.stat(file.absolutePath).st_mode and 0b111111111111 }.getOrDefault(0b111101101)
+            file.inputStream().use { input ->
+                tmp.outputStream().use { output ->
+                    var carry = 0
+                    while (true) {
+                        val read = readFullChunk(input, buf, carry, chunkSize)
+                        if (read <= 0) break
+                        val total = carry + read
+                        var pos = 0
+                        while (pos <= total - from.size) {
+                            val idx = indexOfBytes(buf, total, from, pos)
+                            if (idx < 0) break
+                            System.arraycopy(to, 0, buf, idx, to.size)
+                            patched = true
+                            pos = idx + to.size
+                        }
+                        val emitLen = if (read < chunkSize) total else (total - overlap).coerceAtLeast(0)
+                        if (emitLen > 0) {
+                            output.write(buf, 0, emitLen)
+                        }
+                        val rem = total - emitLen
+                        if (rem > 0) {
+                            System.arraycopy(buf, emitLen, buf, 0, rem)
+                        }
+                        carry = rem
+                    }
+                    if (carry > 0) {
+                        output.write(buf, 0, carry)
+                    }
+                    output.flush()
+                }
+            }
+            runCatching { Os.chmod(tmp.absolutePath, origMode) }
+            if (!tmp.renameTo(file)) {
+                tmp.delete()
+                return false
+            }
+            return patched
+        } catch (_: Exception) {
+            runCatching { tmp.delete() }
+            return false
+        }
+    }
+
+    suspend fun applyRegionEligibilityPatch(enable: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val from = if (enable) BYTES_INELIGIBLE else BYTES_INEXIGIBLE
+        val to = if (enable) BYTES_INEXIGIBLE else BYTES_INELIGIBLE
+        var anyPatched = false
+        for (target in findRegionPatchTargets()) {
+            if (replaceSameLengthInFile(target, from, to)) {
+                anyPatched = true
+            }
+        }
+        anyPatched
     }
 
     @JvmStatic

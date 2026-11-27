@@ -179,7 +179,8 @@ object AntigravityJsBridge {
                             var ct = (resp && resp.headers && resp.headers.get('content-type')) || '';
                             if (resp && (resp.status === 429 || (!resp.ok && resp.status >= 400) || ct.indexOf('application/json') !== -1)) {
                                 var cl = parseInt((resp.headers && resp.headers.get('content-length')) || '0', 10);
-                                if (!cl || cl <= 65536) {
+                                var maxLen = (resp.status === 429 || !resp.ok) ? 65536 : 16384;
+                                if (!cl || cl <= maxLen) {
                                     resp.clone().text().then(function(body) {
                                         if (resp.status === 429) {
                                             if (!body || isQuotaText(body)) {

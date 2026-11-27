@@ -200,9 +200,25 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
+    private var pendingUpdateApkFile: File? = null
+
+    private val installPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        val apk = pendingUpdateApkFile
+        if (apk != null && apk.isFile &&
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls())
+        ) {
+            pendingUpdateApkFile = null
+            runCatching { startActivity(InAppUpdater.buildInstallIntent(this, apk)) }
+                .onFailure { Toast.makeText(this, "Unable to launch installer: ${it.message}", Toast.LENGTH_LONG).show() }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AntigravityEngine.initPaths(this)
+        lifecycleScope.launch(Dispatchers.IO) { InAppUpdater.cleanupCachedUpdates(this@AntigravityMainActivity) }
         window.decorView.setBackgroundColor(Color.parseColor("#0B0D10"))
         setContentView(R.layout.activity_antigravity_main)
 
@@ -773,6 +789,14 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 }
                 override fun onAddAccount() = startAddAccountFlow()
                 override fun onSwitchAccount(account: AccountProfile) = switchAccountNow(account)
+                override fun onToggleRegionBypass(enabled: Boolean, onReverted: () -> Unit) {
+                    if (enabled) {
+                        showRegionBypassDisclaimerDialog(onCancel = onReverted)
+                    } else {
+                        toggleRegionBypassAndRestart(false)
+                    }
+                }
+                override fun onStartInAppUpdate(info: UpdateReleaseInfo) = startInAppUpdateFlow(info)
                 override fun onReloadWebView() {
                     val url = hubViewModel.currentState.currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
                     if (url != null) {
@@ -1329,7 +1353,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             return null
         }
         clearWebViewSessionData()
-        val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity)
+        val newUrl = AntigravityEngine.restartHub(
+            context = this@AntigravityMainActivity,
+            skipStop = !alreadySwitched
+        ) { oauthUrl ->
+            openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
+        }
         if (newUrl != null) {
             splashContainer.visibility = View.GONE
             webView.visibility = View.VISIBLE
@@ -1452,26 +1481,199 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         addAccountJob = job
     }
 
+    private fun showRegionBypassDisclaimerDialog(onCancel: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle("Experimental Region Bypass")
+            .setMessage(
+                "This experimental option patches local Antigravity CLI binaries on your device to bypass account region checks. " +
+                    "It may break after CLI updates and is used at your own risk with respect to Google's Terms of Service.\n\n" +
+                    "Enable and restart Antigravity Hub?"
+            )
+            .setPositiveButton("I Understand, Enable") { _, _ ->
+                toggleRegionBypassAndRestart(true)
+            }
+            .setNegativeButton("Cancel") { _, _ ->
+                onCancel()
+            }
+            .setOnCancelListener {
+                onCancel()
+            }
+            .show()
+    }
+
+    private fun toggleRegionBypassAndRestart(enabled: Boolean) {
+        if (isHubRestartInFlight || hubViewModel.currentState.isSwitchingAccount) return
+        isHubRestartInFlight = true
+        txtReconnectBanner.text = if (enabled) {
+            "Applying region eligibility bypass & restarting Hub..."
+        } else {
+            "Reverting region eligibility bypass & restarting Hub..."
+        }
+        reconnectBanner.visibility = View.VISIBLE
+
+        lifecycleScope.launch {
+            try {
+                AntigravityEngine.stopBackgroundProcessesSuspend()
+                val patched = AntigravityEngine.applyRegionEligibilityPatch(enabled)
+                AntigravityEngine.setRegionBypassEnabled(this@AntigravityMainActivity, enabled)
+                val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity, skipStop = true) { oauthUrl ->
+                    openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
+                }
+                if (isFinishing || isDestroyed) return@launch
+                if (newUrl != null) {
+                    hubViewModel.setCurrentHubUrl(newUrl)
+                    reconnectBanner.visibility = View.GONE
+                    webView.loadUrl(newUrl)
+                    val msg = when {
+                        enabled && patched -> "Region eligibility bypass enabled"
+                        enabled -> "Region bypass saved (binary already patched or not found)"
+                        patched -> "Region eligibility bypass disabled"
+                        else -> "Region bypass disabled"
+                    }
+                    Toast.makeText(this@AntigravityMainActivity, msg, Toast.LENGTH_LONG).show()
+                } else {
+                    reconnectBanner.visibility = View.GONE
+                    Toast.makeText(this@AntigravityMainActivity, "Failed to restart Hub — check Hub Logs", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                isHubRestartInFlight = false
+            }
+        }
+    }
+
     private fun handleRegionBlockedSignal(reason: String?, isIpBlock: Boolean) {
         val now = System.currentTimeMillis()
         if (isFinishing || isDestroyed || isRegionDialogShowing || now - lastRegionPromptAt < 15_000L) return
         lastRegionPromptAt = now
         isRegionDialogShowing = true
 
-        val title = if (isIpBlock) "Location Blocked by Google" else "Account Region Not Supported"
-        val message = if (isIpBlock) {
-            "Google blocked this request because your current IP or location is not supported by Google Antigravity.\n\n" +
-                "Connect to a supported region and reload."
-        } else {
-            "Google reported that this account's region is not eligible for Google Antigravity.\n\n" +
-                "Try signing in with an eligible account or using a supported region."
-        }
-        AlertDialog.Builder(this)
+        val alreadyEnabled = AntigravityEngine.isRegionBypassEnabled(this)
+        val builder = AlertDialog.Builder(this)
             .setOnDismissListener { isRegionDialogShowing = false }
-            .setTitle(title)
-            .setMessage(message)
-            .setPositiveButton("OK", null)
-            .show()
+
+        if (!alreadyEnabled && !isIpBlock) {
+            builder
+                .setTitle("Account Region Not Supported")
+                .setMessage(
+                    "Google reported that this account's region isn't eligible for Antigravity.\n\n" +
+                        "Enable the experimental Region Eligibility Bypass? You can turn it off anytime in Control Center."
+                )
+                .setPositiveButton("Enable & Restart Hub") { _, _ ->
+                    showRegionBypassDisclaimerDialog(onCancel = {})
+                }
+                .setNegativeButton("Dismiss", null)
+        } else if (isIpBlock) {
+            builder
+                .setTitle("Location Blocked by Google")
+                .setMessage(
+                    "Google blocked this request because your current IP or location is not supported by Google Antigravity.\n\n" +
+                        "The account region bypass cannot override IP blocks — connect to a supported region and reload."
+                )
+                .setPositiveButton("OK", null)
+        } else {
+            builder
+                .setTitle("Account Region Not Supported")
+                .setMessage(
+                    "Google reported that this account's region is not eligible for Google Antigravity.\n\n" +
+                        "Try signing in with an eligible account or using a supported region."
+                )
+                .setPositiveButton("OK", null)
+        }
+        builder.show()
+    }
+
+    private fun startInAppUpdateFlow(info: UpdateReleaseInfo) {
+        val pad = (20 * resources.displayMetrics.density).toInt()
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, pad / 4)
+        }
+        val statusView = TextView(this).apply {
+            text = "Preparing update download..."
+            textSize = 13f
+            setTextColor(Color.parseColor("#D1D5DB"))
+        }
+        val progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = 0
+            isIndeterminate = false
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = (12 * resources.displayMetrics.density).toInt()
+            }
+            layoutParams = lp
+        }
+        container.addView(statusView)
+        container.addView(progressBar)
+
+        var downloadJob: kotlinx.coroutines.Job? = null
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("Updating to ${info.tagName}")
+            .setView(container)
+            .setNegativeButton("Cancel") { _, _ ->
+                downloadJob?.cancel()
+            }
+            .create()
+        dlg.setCanceledOnTouchOutside(false)
+        dlg.setOnCancelListener {
+            downloadJob?.cancel()
+        }
+        dlg.show()
+
+        downloadJob = lifecycleScope.launch {
+            val result = InAppUpdater.downloadAndVerifyApk(this@AntigravityMainActivity, info) { pct, msg ->
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed && dlg.isShowing) {
+                        progressBar.isIndeterminate = (pct == 0 && msg.startsWith("Downloading") && !msg.contains("%"))
+                        progressBar.progress = pct
+                        statusView.text = msg
+                    }
+                }
+            }
+            if (isFinishing || isDestroyed) return@launch
+            if (dlg.isShowing) dlg.dismiss()
+            result.onSuccess { apkFile ->
+                launchApkInstallerOrRequestPermission(apkFile)
+            }.onFailure { err ->
+                if (err !is kotlinx.coroutines.CancellationException) {
+                    Toast.makeText(
+                        this@AntigravityMainActivity,
+                        "Update failed: ${err.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun launchApkInstallerOrRequestPermission(apkFile: File) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+            pendingUpdateApkFile = apkFile
+            AlertDialog.Builder(this)
+                .setTitle("Allow App Installs")
+                .setMessage("Allow Antigravity to install updates from this source, then return to continue installing.")
+                .setPositiveButton("Open Settings") { _, _ ->
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:$packageName")
+                    )
+                    runCatching { installPermissionLauncher.launch(intent) }
+                        .onFailure {
+                            Toast.makeText(this, "Unable to open install settings", Toast.LENGTH_LONG).show()
+                        }
+                }
+                .setNegativeButton("Cancel") { _, _ ->
+                    pendingUpdateApkFile = null
+                }
+                .show()
+            return
+        }
+        runCatching { startActivity(InAppUpdater.buildInstallIntent(this, apkFile)) }
+            .onFailure { err ->
+                Toast.makeText(this, "Unable to launch installer: ${err.message}", Toast.LENGTH_LONG).show()
+            }
     }
 
     private fun handleThemeSnapshot(rawJson: String) {
