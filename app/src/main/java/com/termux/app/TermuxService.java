@@ -173,7 +173,9 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
     public void onDestroy() {
         Logger.logVerbose(LOG_TAG, "onDestroy");
 
-        if (mWantsToStop || !AntigravityEngine.isHubListeningCached()) {
+        if ((mWantsToStop || !AntigravityEngine.isHubListeningCached())
+            && !AntigravityEngine.isInstallRunning()
+            && !BackupRestoreEngine.isBusy()) {
             TermuxShellUtils.clearTermuxTMPDIR(true);
         }
 
@@ -875,6 +877,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         if (mWakeLock == null && mShellManager.mTermuxSessions.isEmpty() && mShellManager.mTermuxTasks.isEmpty()
             && !AntigravityEngine.isHubListeningCached()
             && !AntigravityEngine.isHubTransitionInProgress()
+            && !AntigravityEngine.isInstallRunning()
             && !BackupRestoreEngine.isBusy()
             && !AntigravityNotifier.isActivityForeground) {
             // Exit if we are updating after the user disabled all locks with no sessions, tasks, or Hub running.

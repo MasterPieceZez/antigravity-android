@@ -181,7 +181,7 @@ object AntigravityJsBridge {
                                             if (!body || isQuotaText(body)) {
                                                 signalQuota(body || 'HTTP 429 rate limit');
                                             }
-                                        } else if (isQuotaText(body)) {
+                                        } else if (!resp.ok && isQuotaText(body)) {
                                             signalQuota(body);
                                         }
                                         signalRegionIfMatched(body);
@@ -265,6 +265,15 @@ object AntigravityJsBridge {
                 } catch (e) {}
             }
             setTimeout(snapshotHubTheme, 900);
+            try {
+                var themeObs = new MutationObserver(function() {
+                    setTimeout(snapshotHubTheme, 250);
+                });
+                themeObs.observe(document.documentElement, {
+                    attributes: true,
+                    attributeFilter: ['class', 'style', 'data-theme', 'data-color-mode']
+                });
+            } catch (e) {}
         })();
     """.trimIndent()
 

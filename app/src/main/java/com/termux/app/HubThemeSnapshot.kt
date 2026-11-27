@@ -97,6 +97,13 @@ data class HubThemeSnapshot(
                     }
                     child.background = cardDrawable
                     child.elevation = (shadowDp * 0.4f).coerceIn(2f, 8f) * dp
+                } else if (child is TextView && !isDark) {
+                    val current = child.currentTextColor
+                    // Remap dark-theme light text colors when Hub runs a light theme
+                    val lum = (0.299 * Color.red(current) + 0.587 * Color.green(current) + 0.114 * Color.blue(current)) / 255.0
+                    if (lum > 0.6 && child.background == null) {
+                        child.setTextColor(if (lum > 0.8) textPrimary else textSecondary)
+                    }
                 }
                 styleCardsRecursively(child, dp, strokePx)
             }

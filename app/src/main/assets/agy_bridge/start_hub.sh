@@ -46,11 +46,11 @@ is_lock_stale() {
         fi
         return 1
     fi
-    # Missing/empty pid file: treat lock as stale if older than 15 seconds
+    # Missing/empty pid file: treat lock as stale if older than 5 seconds
     local now mtime
     now=$(date +%s 2>/dev/null || echo 0)
     mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)
-    if [ "$now" -gt 0 ] && [ "$mtime" -gt 0 ] && [ $((now - mtime)) -ge 15 ]; then
+    if [ "$now" -gt 0 ] && [ "$mtime" -gt 0 ] && [ $((now - mtime)) -ge 5 ]; then
         return 0
     fi
     return 1

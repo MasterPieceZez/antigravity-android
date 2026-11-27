@@ -42,7 +42,7 @@ class FloatingPillController(
         var dY = 0f
         var dragging = false
 
-        val dragListener = View.OnTouchListener { _, event ->
+        val dragListener = View.OnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downRawX = event.rawX
@@ -57,6 +57,11 @@ class FloatingPillController(
                     val movedY = abs(event.rawY - downRawY)
                     if (!dragging && (movedX > touchSlop || movedY > touchSlop)) {
                         dragging = true
+                        if (v !== floatingPill) {
+                            val cancelEvent = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
+                            v.onTouchEvent(cancelEvent)
+                            cancelEvent.recycle()
+                        }
                     }
                     if (dragging) {
                         val maxX = (rootView.width - floatingPill.width).coerceAtLeast(0).toFloat()

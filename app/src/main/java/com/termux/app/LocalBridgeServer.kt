@@ -147,7 +147,6 @@ class LocalBridgeServer(
             // Constant-time X-Bridge-Token check
             val expectedToken = AntigravityEngine.getOrCreateBridgeToken()
             if (!isValidToken(headers["x-bridge-token"], expectedToken)) {
-                delay(250L)
                 writeJson(out, 403, JSONObject().put("ok", false).put("error", "unauthorized"), reqOrigin)
                 return
             }
@@ -194,6 +193,12 @@ class LocalBridgeServer(
                 }
                 method == "POST" && route == "/restart-agy" -> {
                     val newUrl = AntigravityEngine.restartHub(context)
+                    if (newUrl != null) {
+                        val updateIntent = android.content.Intent("com.agy.os.ACTION_HUB_URL_UPDATED")
+                            .setPackage(context.packageName)
+                            .putExtra("hub_url", newUrl)
+                        runCatching { context.sendBroadcast(updateIntent) }
+                    }
                     val payload = JSONObject()
                         .put("ok", newUrl != null)
                         .put("hub_url", newUrl ?: JSONObject.NULL)
@@ -304,7 +309,8 @@ class LocalBridgeServer(
             val scheme = uri.scheme?.lowercase() ?: return false
             if (scheme != "http" && scheme != "https") return false
             val host = uri.host?.lowercase() ?: return false
-            return host == "localhost" || host == "127.0.0.1"
+            if (host != "localhost" && host != "127.0.0.1") return false
+            return uri.port == AntigravityEngine.HUB_PORT || uri.port == AntigravityEngine.BRIDGE_PORT
         }
 
         fun isValidToken(supplied: String?, expected: String): Boolean {

@@ -75,6 +75,7 @@ object AntigravityEngine {
     private val tokenLock = Any()
     private val installInProgress = AtomicBoolean(false)
     private val activeInstallProcess = AtomicReference<Process?>(null)
+    private val activeInstallPgid = AtomicInteger(-1)
     private val hubTransitionCount = AtomicInteger(0)
     @Volatile
     private var assetsProvisioned = false
@@ -97,6 +98,11 @@ object AntigravityEngine {
     fun isInstallRunning(): Boolean = installInProgress.get()
 
     fun cancelInstall() {
+        val pgid = activeInstallPgid.getAndSet(-1)
+        if (pgid > 1) {
+            runCatching { Os.kill(-pgid, 15) }
+            runCatching { Os.kill(-pgid, 9) }
+        }
         activeInstallProcess.getAndSet(null)?.destroyForcibly()
     }
 
@@ -763,7 +769,13 @@ object AntigravityEngine {
                 fi
                 bash "${'$'}INSTALL_SH"
             """.trimIndent()
-            val pb = ProcessBuilder(BASH_BIN, "-c", script)
+            val setsidBin = File("$PREFIX_DIR/bin/setsid")
+            val wrappedScript = "echo \"__AGY_INSTALL_PID__=$$\"\n$script"
+            val pb = if (setsidBin.isFile) {
+                ProcessBuilder(setsidBin.absolutePath, BASH_BIN, "-c", wrappedScript)
+            } else {
+                ProcessBuilder(BASH_BIN, "-c", wrappedScript)
+            }
             pb.directory(File(HOME_DIR))
             pb.environment().putAll(buildTermuxEnv())
             pb.redirectErrorStream(true)
@@ -776,16 +788,22 @@ object AntigravityEngine {
             val logWriter = runCatching { installLogFile.bufferedWriter() }.getOrNull()
             try {
                 proc.inputStream.bufferedReader().forEachLine { line ->
+                    val trimmed = line.trim()
+                    if (trimmed.startsWith("__AGY_INSTALL_PID__=")) {
+                        trimmed.substringAfter("__AGY_INSTALL_PID__=").toIntOrNull()?.let { pid ->
+                            if (setsidBin.isFile) activeInstallPgid.set(pid)
+                        }
+                        return@forEachLine
+                    }
                     runCatching {
                         logWriter?.write(line)
                         logWriter?.newLine()
                     }
-                    val clean = line.trim()
-                    if (clean.isNotEmpty()) {
+                    if (trimmed.isNotEmpty()) {
                         if (recentLines.size >= 10) recentLines.removeFirst()
-                        recentLines.addLast(clean)
+                        recentLines.addLast(trimmed)
                         step = (step + 1).coerceAtMost(92)
-                        onStatus(step, clean.take(90))
+                        onStatus(step, trimmed.take(90))
                     }
                 }
             } finally {
@@ -815,6 +833,11 @@ object AntigravityEngine {
         } catch (e: Exception) {
             Result.failure(e)
         } finally {
+            val pgid = activeInstallPgid.getAndSet(-1)
+            if (pgid > 1) {
+                runCatching { Os.kill(-pgid, 15) }
+                runCatching { Os.kill(-pgid, 9) }
+            }
             activeInstallProcess.getAndSet(null)?.let { p ->
                 if (p.isAlive) runCatching { p.destroyForcibly() }
             }
@@ -966,7 +989,17 @@ object AntigravityEngine {
         return -1
     }
 
-    private fun replaceSameLengthInFile(file: File, from: ByteArray, to: ByteArray): Boolean {
+    private fun readFullChunk(input: java.io.InputStream, buf: ByteArray, offset: Int, maxLen: Int): Int {
+        var total = 0
+        while (total < maxLen) {
+            val n = input.read(buf, offset + total, maxLen - total)
+            if (n <= 0) break
+            total += n
+        }
+        return total
+    }
+
+    internal fun replaceSameLengthInFile(file: File, from: ByteArray, to: ByteArray): Boolean {
         if (!file.isFile || from.size != to.size || from.isEmpty()) return false
         val chunkSize = 1024 * 1024
         val overlap = from.size - 1
@@ -976,13 +1009,14 @@ object AntigravityEngine {
         file.inputStream().use { input ->
             var carry = 0
             while (true) {
-                val read = input.read(buf, carry, chunkSize)
+                val read = readFullChunk(input, buf, carry, chunkSize)
                 if (read <= 0) break
                 val total = carry + read
                 if (indexOfBytes(buf, total, from) >= 0) {
                     found = true
                     break
                 }
+                if (read < chunkSize) break
                 if (total >= overlap) {
                     System.arraycopy(buf, total - overlap, buf, 0, overlap)
                     carry = overlap
@@ -993,7 +1027,8 @@ object AntigravityEngine {
         }
         if (!found) return false
 
-        val tmp = File(file.parentFile, "${file.name}.agypatch.${Os.getpid()}.tmp")
+        val pid = runCatching { Os.getpid() }.getOrDefault(0)
+        val tmp = File(file.parentFile, "${file.name}.agypatch.$pid.tmp")
         var patched = false
         try {
             val origMode = runCatching { Os.stat(file.absolutePath).st_mode and 0b111111111111 }.getOrDefault(0b111101101)
@@ -1001,7 +1036,7 @@ object AntigravityEngine {
                 tmp.outputStream().use { output ->
                     var carry = 0
                     while (true) {
-                        val read = input.read(buf, carry, chunkSize)
+                        val read = readFullChunk(input, buf, carry, chunkSize)
                         if (read <= 0) break
                         val total = carry + read
                         var pos = 0

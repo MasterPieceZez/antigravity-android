@@ -66,6 +66,8 @@ class AntigravityCoreTest {
         assertTrue(LocalBridgeServer.isAllowedOrigin(null))
         assertTrue(LocalBridgeServer.isAllowedOrigin("http://localhost:4400"))
         assertTrue(LocalBridgeServer.isAllowedOrigin("http://127.0.0.1:4400"))
+        assertTrue(LocalBridgeServer.isAllowedOrigin("http://localhost:4401"))
+        assertFalse(LocalBridgeServer.isAllowedOrigin("http://localhost:9999"))
         assertFalse(LocalBridgeServer.isAllowedOrigin("file://localhost/etc/passwd"))
         assertFalse(LocalBridgeServer.isAllowedOrigin("https://evil.example.com"))
         assertFalse(LocalBridgeServer.isAllowedOrigin("http://localhost.evil.com"))
@@ -337,5 +339,25 @@ class AntigravityCoreTest {
         assertTrue(AntigravityEngine.isNetworkErrorOutput("E: Failed to fetch https://packages.termux.dev/... Temporary failure in name resolution"))
         assertTrue(AntigravityEngine.isNetworkErrorOutput("curl: (28) Connection timed out after 15000 milliseconds"))
         assertFalse(AntigravityEngine.isNetworkErrorOutput("Installing antigravity CLI v1.2.3..."))
+    }
+
+    @Test
+    fun engine_replaceSameLengthInFile_handlesChunkBoundary() {
+        val f = tempFolder.newFile("boundary.bin")
+        val chunkSize = 1024 * 1024
+        val prefix = ByteArray(chunkSize - 5) { 'A'.code.toByte() }
+        val target = "ineligible".toByteArray(Charsets.US_ASCII)
+        val suffix = ByteArray(128) { 'Z'.code.toByte() }
+        f.writeBytes(prefix + target + suffix)
+
+        val changed = AntigravityEngine.replaceSameLengthInFile(
+            f,
+            "ineligible".toByteArray(Charsets.US_ASCII),
+            "inexigible".toByteArray(Charsets.US_ASCII)
+        )
+        assertTrue(changed)
+        val result = f.readBytes()
+        assertEquals(prefix.size + target.size + suffix.size, result.size)
+        assertEquals("inexigible", String(result, prefix.size, target.size, Charsets.US_ASCII))
     }
 }

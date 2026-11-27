@@ -42,7 +42,7 @@ jobs:
       - name: Run Android Unit Tests
         run: |
           chmod +x gradlew
-          ./gradlew :app:testDebugUnitTest --no-daemon
+          ./gradlew :app:testDebugUnitTest :terminal-emulator:test --no-daemon
 
   build-apk:
     runs-on: ubuntu-latest

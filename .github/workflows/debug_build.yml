@@ -25,6 +25,7 @@ jobs:
         run: |
           bash -n app/src/main/assets/agy_bridge/start_hub.sh
           bash -n app/src/main/assets/agy_bridge/dpkg_wrap.sh
+          bash -n app/src/main/assets/agy_bridge/xdg-open
           gcc -O2 -std=c11 -Wall -Wextra -Werror tools/agy_patch.c -o /tmp/agy_patch_host
           python3 tools/test_agy_patch.py /tmp/agy_patch_host
 

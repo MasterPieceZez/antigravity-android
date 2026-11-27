@@ -266,7 +266,7 @@ object BackupRestoreEngine {
             val env = AntigravityEngine.buildTermuxEnv()
 
             val stagingDir = File(filesRoot, "restore-staging")
-            if (stagingDir.exists()) stagingDir.deleteRecursively()
+            if (stagingDir.exists()) deleteRecursivelySafe(stagingDir)
             stagingDir.mkdirs()
 
             onProgress(10, "Extracting Linux environment & Antigravity...")
@@ -431,7 +431,7 @@ object BackupRestoreEngine {
                 runCatching { zstdProc?.destroyForcibly() }
                 runCatching { patchProc?.destroyForcibly() }
                 runCatching { tarProc?.destroyForcibly() }
-                runCatching { stagingDir.deleteRecursively() }
+                runCatching { deleteRecursivelySafe(stagingDir) }
             }
 
             onProgress(95, "Fixing permissions & provisioning bridge...")
@@ -487,6 +487,28 @@ object BackupRestoreEngine {
 
     private val PACKAGES_ONLY_HOME_SUBDIRS = setOf(".local", ".agents")
 
+    private fun deleteRecursivelySafe(target: File): Boolean {
+        if (!target.exists()) return true
+        runCatching {
+            target.walkBottomUp().forEach { f ->
+                val isLnk = runCatching {
+                    val st = Os.lstat(f.absolutePath)
+                    (st.st_mode and 0b1111000000000000) == 0b1010000000000000 // S_IFLNK
+                }.getOrDefault(false)
+                if (!isLnk) {
+                    if (f.isDirectory) {
+                        f.setReadable(true, true)
+                        f.setWritable(true, true)
+                        f.setExecutable(true, true)
+                    } else {
+                        f.setWritable(true, true)
+                    }
+                }
+            }
+        }
+        return target.deleteRecursively()
+    }
+
     internal fun swapStagedDirs(filesRoot: File, stagingDir: File): Result<Unit> {
         val swapped = mutableListOf<Pair<File, File>>()
         val created = mutableListOf<File>()
@@ -502,7 +524,7 @@ object BackupRestoreEngine {
                         for (sub in homeEntries) {
                             val subTarget = File(target, sub.name)
                             val subBackup = File(target, "${sub.name}.restore-bak")
-                            if (subBackup.exists()) subBackup.deleteRecursively()
+                            if (subBackup.exists()) deleteRecursivelySafe(subBackup)
                             if (subTarget.exists()) {
                                 if (!subTarget.renameTo(subBackup)) {
                                     throw IllegalStateException("Failed to stage backup of home/${sub.name}")
@@ -519,7 +541,7 @@ object BackupRestoreEngine {
                     }
                 }
                 val backup = File(filesRoot, "${stagedChild.name}.restore-bak")
-                if (backup.exists()) backup.deleteRecursively()
+                if (backup.exists()) deleteRecursivelySafe(backup)
                 if (target.exists()) {
                     if (!target.renameTo(backup)) {
                         throw IllegalStateException("Failed to stage backup of ${target.name}")
@@ -533,16 +555,16 @@ object BackupRestoreEngine {
                 }
             }
             for ((_, backup) in swapped) {
-                runCatching { backup.deleteRecursively() }
+                runCatching { deleteRecursivelySafe(backup) }
             }
             return Result.success(Unit)
         } catch (e: Exception) {
             for (c in created.asReversed()) {
-                runCatching { if (c.exists()) c.deleteRecursively() }
+                runCatching { if (c.exists()) deleteRecursivelySafe(c) }
             }
             for ((target, backup) in swapped.asReversed()) {
                 runCatching {
-                    if (target.exists()) target.deleteRecursively()
+                    if (target.exists()) deleteRecursivelySafe(target)
                     backup.renameTo(target)
                 }
             }

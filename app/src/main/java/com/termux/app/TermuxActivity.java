@@ -921,7 +921,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         intentFilter.addAction(TERMUX_ACTIVITY.ACTION_RELOAD_STYLE);
         intentFilter.addAction(TERMUX_ACTIVITY.ACTION_REQUEST_PERMISSIONS);
 
-        registerReceiver(mTermuxActivityBroadcastReceiver, intentFilter);
+        androidx.core.content.ContextCompat.registerReceiver(this, mTermuxActivityBroadcastReceiver, intentFilter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED);
     }
 
     private void unregisterTermuxActivityBroadcastReceiver() {
@@ -980,8 +980,6 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         setMargins();
         setTerminalToolbarHeight();
-
-        FileReceiverActivity.updateFileReceiverActivityComponentsState(this);
 
         if (mTermuxTerminalSessionActivityClient != null)
             mTermuxTerminalSessionActivityClient.onReloadActivityStyling();

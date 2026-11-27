@@ -90,8 +90,13 @@ public class TermuxDocumentsProvider extends DocumentsProvider {
     public Cursor queryChildDocuments(String parentDocumentId, String[] projection, String sortOrder) throws FileNotFoundException {
         final MatrixCursor result = new MatrixCursor(projection != null ? projection : DEFAULT_DOCUMENT_PROJECTION);
         final File parent = getFileForDocId(parentDocumentId);
-        for (File file : parent.listFiles()) {
-            includeFile(result, null, file);
+        final File[] children = parent.listFiles();
+        if (children != null) {
+            for (File file : children) {
+                if (!isHiddenInternalPath(file)) {
+                    includeFile(result, null, file);
+                }
+            }
         }
         return result;
     }
@@ -117,10 +122,17 @@ public class TermuxDocumentsProvider extends DocumentsProvider {
 
     @Override
     public String createDocument(String parentDocumentId, String mimeType, String displayName) throws FileNotFoundException {
-        File newFile = new File(parentDocumentId, displayName);
+        final File parent = getFileForDocId(parentDocumentId);
+        if (displayName == null || displayName.isEmpty() || displayName.contains("/") || displayName.contains("\\") || "..".equals(displayName) || ".".equals(displayName)) {
+            throw new FileNotFoundException("Invalid document name");
+        }
+        File newFile = new File(parent, displayName);
         int noConflictId = 2;
         while (newFile.exists()) {
-            newFile = new File(parentDocumentId, displayName + " (" + noConflictId++ + ")");
+            newFile = new File(parent, displayName + " (" + noConflictId++ + ")");
+        }
+        if (isHiddenInternalPath(newFile)) {
+            throw new FileNotFoundException("Protected internal path");
         }
         try {
             boolean succeeded;
@@ -175,9 +187,12 @@ public class TermuxDocumentsProvider extends DocumentsProvider {
             } catch (IOException e) {
                 isInsideHome = true;
             }
-            if (isInsideHome) {
+            if (isInsideHome && !isHiddenInternalPath(file)) {
                 if (file.isDirectory()) {
-                    Collections.addAll(pending, file.listFiles());
+                    File[] children = file.listFiles();
+                    if (children != null) {
+                        Collections.addAll(pending, children);
+                    }
                 } else {
                     if (file.getName().toLowerCase().contains(query)) {
                         includeFile(result, null, file);
@@ -208,9 +223,36 @@ public class TermuxDocumentsProvider extends DocumentsProvider {
      * Get the file given a document id (the reverse of {@link #getDocIdForFile(File)}).
      */
     private static File getFileForDocId(String docId) throws FileNotFoundException {
+        if (docId == null || docId.isEmpty()) throw new FileNotFoundException("Empty document id");
         final File f = new File(docId);
         if (!f.exists()) throw new FileNotFoundException(f.getAbsolutePath() + " not found");
+        try {
+            final String baseCanon = BASE_DIR.getCanonicalPath();
+            final String targetCanon = f.getCanonicalPath();
+            if (!targetCanon.equals(baseCanon) && !targetCanon.startsWith(baseCanon + File.separator)) {
+                throw new FileNotFoundException("Access outside home directory denied");
+            }
+        } catch (IOException e) {
+            throw new FileNotFoundException("Invalid document path");
+        }
+        if (isHiddenInternalPath(f)) {
+            throw new FileNotFoundException("Protected internal path");
+        }
         return f;
+    }
+
+    private static boolean isHiddenInternalPath(File file) {
+        try {
+            final String baseCanon = BASE_DIR.getCanonicalPath();
+            final String targetCanon = file.getCanonicalPath();
+            if (!targetCanon.startsWith(baseCanon + File.separator)) return false;
+            final String rel = targetCanon.substring(baseCanon.length() + 1);
+            return rel.equals(".agy_bridge") || rel.startsWith(".agy_bridge" + File.separator) ||
+                rel.equals(".gemini") || rel.startsWith(".gemini" + File.separator) ||
+                rel.equals(".config/antigravity") || rel.startsWith(".config/antigravity" + File.separator);
+        } catch (IOException e) {
+            return true;
+        }
     }
 
     private static String getMimeType(File file) {
