@@ -380,4 +380,18 @@ class AntigravityCoreTest {
         assertEquals(2, vm.recordRenderCrash(15_000L))
         assertEquals(1, vm.recordRenderCrash(40_000L))
     }
+
+    @Test
+    fun engine_parsesCurlProgressAndSpeed() {
+        val line = " 42 85.2M   42 35.8M    0     0  3450k      0  0:00:25  0:00:10  0:00:15 3620k"
+        val parsed = AntigravityEngine.parseCurlProgressLine(line)
+        assertNotNull(parsed)
+        assertEquals(42, parsed!!.first)
+        assertEquals("3.5 MB/s", parsed.second)
+
+        assertEquals("512 KB/s", AntigravityEngine.formatCurlSpeed("512k"))
+        assertEquals("12.4 MB/s", AntigravityEngine.formatCurlSpeed("12.4M"))
+        assertEquals("", AntigravityEngine.formatCurlSpeed("0"))
+        assertNull(AntigravityEngine.parseCurlProgressLine("Installing antigravity CLI..."))
+    }
 }

@@ -773,8 +773,9 @@ object AntigravityEngine {
                 export APT_LISTCHANGES_FRONTEND=none
                 INSTALL_SH="${'$'}TMPDIR/agy_install.sh"
                 INSTALL_LOG="${'$'}HOME/.agy_bridge/install.log"
+                CURL_WRAP_DIR="${'$'}TMPDIR/agy_curl_wrap"
                 mkdir -p "${'$'}HOME/.agy_bridge"
-                trap 'rm -f "${'$'}INSTALL_SH"' EXIT
+                trap 'rm -rf "${'$'}INSTALL_SH" "${'$'}CURL_WRAP_DIR"' EXIT
                 fetch_installer() {
                     curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time "${'$'}1" --retry 3 --retry-all-errors -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh 2>/dev/null || \
                     curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time "${'$'}1" --retry 3 -o "${'$'}INSTALL_SH" https://antigravity.google/cli/install.sh
@@ -792,6 +793,34 @@ object AntigravityEngine {
                 if command -v sha256sum >/dev/null 2>&1; then
                     SH_HASH=$(sha256sum "${'$'}INSTALL_SH" | awk '{print $1}')
                     printf '[%s] install.sh sha256=%s\n' "$(date -Iseconds 2>/dev/null || date)" "${'$'}SH_HASH" >> "${'$'}INSTALL_LOG"
+                fi
+                REAL_CURL=$(command -v curl || true)
+                if [ -n "${'$'}REAL_CURL" ]; then
+                    mkdir -p "${'$'}CURL_WRAP_DIR"
+                    cat > "${'$'}CURL_WRAP_DIR/curl" <<EOF
+#!${'$'}PREFIX/bin/bash
+HAS_OUT=0
+ARGS=()
+for a in "\$@"; do
+    case "\$a" in
+        -o|-O|--output|--output=*) HAS_OUT=1 ;;
+    esac
+done
+if [ "\$HAS_OUT" -eq 1 ]; then
+    for a in "\$@"; do
+        case "\$a" in
+            -s|--silent|-#|--progress-bar) ;;
+            -fsSL|-fSLs|-sSL|-sL) ARGS+=("-fL") ;;
+            *) ARGS+=("\$a") ;;
+        esac
+    done
+    exec "$REAL_CURL" --progress-meter "\${ARGS[@]}"
+else
+    exec "$REAL_CURL" "\$@"
+fi
+EOF
+                    chmod 0755 "${'$'}CURL_WRAP_DIR/curl"
+                    export PATH="${'$'}CURL_WRAP_DIR:${'$'}PATH"
                 fi
                 bash "${'$'}INSTALL_SH"
                 if [ -f "${'$'}HOME/.local/bin/agy" ] && command -v sha256sum >/dev/null 2>&1; then
@@ -813,27 +842,67 @@ object AntigravityEngine {
             activeInstallProcess.set(proc)
             proc.outputStream.close()
             var step = 15
+            var lastProgressEmitMs = 0L
+            var lastReportedPct = -1
             val recentLines = ArrayDeque<String>(12)
             val installLogFile = File(INSTALL_LOG).apply { parentFile?.mkdirs() }
             val logWriter = runCatching { installLogFile.bufferedWriter() }.getOrNull()
             try {
-                proc.inputStream.bufferedReader().forEachLine { line ->
-                    val trimmed = line.trim()
+                val reader = proc.inputStream.bufferedReader()
+                val lineBuf = StringBuilder()
+                fun handleSegment(raw: String, isProgressCr: Boolean) {
+                    val trimmed = raw.trim()
+                    if (trimmed.isEmpty()) return
                     if (trimmed.startsWith("__AGY_INSTALL_PID__=")) {
                         trimmed.substringAfter("__AGY_INSTALL_PID__=").toIntOrNull()?.let { pid ->
                             if (setsidBin.isFile) activeInstallPgid.set(pid)
                         }
-                        return@forEachLine
+                        return
                     }
-                    runCatching {
-                        logWriter?.write(line)
-                        logWriter?.newLine()
+                    val curlProgress = parseCurlProgressLine(trimmed)
+                    if (curlProgress != null) {
+                        val (dlPct, speed) = curlProgress
+                        val now = System.currentTimeMillis()
+                        if (dlPct != lastReportedPct || now - lastProgressEmitMs >= 150L) {
+                            lastReportedPct = dlPct
+                            lastProgressEmitMs = now
+                            val mappedStep = (15 + (dlPct * 75) / 100).coerceIn(15, 90)
+                            step = mappedStep
+                            val msg = if (speed.isNotEmpty()) {
+                                "Downloading Antigravity CLI... $dlPct% ($speed)"
+                            } else {
+                                "Downloading Antigravity CLI... $dlPct%"
+                            }
+                            onStatus(mappedStep, msg)
+                        }
+                        return
                     }
-                    if (trimmed.isNotEmpty()) {
+                    if (!isProgressCr) {
+                        runCatching {
+                            logWriter?.write(raw)
+                            logWriter?.newLine()
+                        }
                         if (recentLines.size >= 10) recentLines.removeFirst()
                         recentLines.addLast(trimmed)
                         step = (step + 1).coerceAtMost(92)
                         onStatus(step, trimmed.take(90))
+                    }
+                }
+                while (true) {
+                    val ch = reader.read()
+                    if (ch == -1) {
+                        if (lineBuf.isNotEmpty()) {
+                            handleSegment(lineBuf.toString(), isProgressCr = false)
+                        }
+                        break
+                    }
+                    if (ch == '\r'.code || ch == '\n'.code) {
+                        if (lineBuf.isNotEmpty()) {
+                            handleSegment(lineBuf.toString(), isProgressCr = (ch == '\r'.code))
+                            lineBuf.setLength(0)
+                        }
+                    } else if (lineBuf.length < 1024) {
+                        lineBuf.append(ch.toChar())
                     }
                 }
             } finally {
@@ -967,6 +1036,40 @@ object AntigravityEngine {
             delay(50L)
         }
         cachedHubListening = false
+    }
+
+    internal fun formatCurlSpeed(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty() || trimmed == "0" || trimmed == "--:--:--") return ""
+        val suffix = trimmed.last()
+        val numStr = if (suffix.isLetter()) trimmed.dropLast(1) else trimmed
+        val value = numStr.toDoubleOrNull() ?: return ""
+        if (value <= 0.0) return ""
+        return when (suffix.lowercaseChar()) {
+            'k' -> if (value >= 1000.0) {
+                String.format(java.util.Locale.US, "%.1f MB/s", value / 1024.0)
+            } else {
+                String.format(java.util.Locale.US, "%.0f KB/s", value)
+            }
+            'm' -> String.format(java.util.Locale.US, "%.1f MB/s", value)
+            'g' -> String.format(java.util.Locale.US, "%.2f GB/s", value)
+            else -> when {
+                value >= 1024.0 * 1024.0 -> String.format(java.util.Locale.US, "%.1f MB/s", value / (1024.0 * 1024.0))
+                value >= 1024.0 -> String.format(java.util.Locale.US, "%.0f KB/s", value / 1024.0)
+                else -> String.format(java.util.Locale.US, "%.0f B/s", value)
+            }
+        }
+    }
+
+    internal fun parseCurlProgressLine(line: String): Pair<Int, String>? {
+        val parts = line.trim().split(Regex("\\s+"))
+        if (parts.size < 12) return null
+        val pct = parts[0].toIntOrNull() ?: return null
+        val recvPct = parts[2].toIntOrNull() ?: return null
+        if (pct !in 0..100 || recvPct !in 0..100) return null
+        if (!parts[9].contains(':')) return null
+        val speed = formatCurlSpeed(parts[11]).ifEmpty { formatCurlSpeed(parts[6]) }
+        return pct to speed
     }
 
     @JvmStatic
