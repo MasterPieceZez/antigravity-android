@@ -54,6 +54,10 @@ object AntigravityEngine {
     const val HOME_DIR = "$FILES_DIR/home"
     const val BRIDGE_DIR = "$HOME_DIR/.agy_bridge"
     const val AGY_BIN = "$HOME_DIR/.local/bin/agy"
+    private const val PREFS_ENGINE = "antigravity_prefs"
+    private const val KEY_REGION_BYPASS = "region_eligibility_bypass"
+    private val BYTES_INELIGIBLE = "ineligible".toByteArray(Charsets.US_ASCII)
+    private val BYTES_INEXIGIBLE = "inexigible".toByteArray(Charsets.US_ASCII)
     const val AGY_LOG = "$BRIDGE_DIR/agy.log"
     const val INSTALL_LOG = "$BRIDGE_DIR/install.log"
     const val HUB_URL_FILE = "$BRIDGE_DIR/hub.url"
@@ -791,6 +795,9 @@ object AntigravityEngine {
             val code = proc.waitFor()
             if (code == 0 && isAgyInstalled()) {
                 provisionBridgeAssets(context)
+                if (isRegionBypassEnabled(context)) {
+                    applyRegionEligibilityPatch(true)
+                }
                 onStatus(100, "Antigravity CLI installed!")
                 Result.success(Unit)
             } else {
@@ -910,6 +917,139 @@ object AntigravityEngine {
             delay(50L)
         }
         cachedHubListening = false
+    }
+
+    fun isRegionBypassEnabled(context: Context): Boolean {
+        return context.getSharedPreferences(PREFS_ENGINE, Context.MODE_PRIVATE)
+            .getBoolean(KEY_REGION_BYPASS, false)
+    }
+
+    fun setRegionBypassEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS_ENGINE, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_REGION_BYPASS, enabled)
+            .apply()
+    }
+
+    private fun findRegionPatchTargets(): List<File> {
+        val targets = LinkedHashSet<File>()
+        val agy = File(AGY_BIN)
+        if (agy.isFile && agy.length() > 4096L) {
+            targets.add(agy)
+        }
+        for (base in listOf("$HOME_DIR/.local", "$HOME_DIR/.antigravity")) {
+            val dir = File(base)
+            if (!dir.isDirectory) continue
+            dir.walkTopDown().maxDepth(5).forEach { f ->
+                if (f.isFile && f.length() > 4096L && (f.name == "agy" || f.name.startsWith("language_server"))) {
+                    targets.add(f)
+                }
+            }
+        }
+        return targets.toList()
+    }
+
+    private fun indexOfBytes(haystack: ByteArray, length: Int, needle: ByteArray, start: Int = 0): Int {
+        val limit = length - needle.size
+        var i = start
+        while (i <= limit) {
+            var match = true
+            for (j in needle.indices) {
+                if (haystack[i + j] != needle[j]) {
+                    match = false
+                    break
+                }
+            }
+            if (match) return i
+            i++
+        }
+        return -1
+    }
+
+    private fun replaceSameLengthInFile(file: File, from: ByteArray, to: ByteArray): Boolean {
+        if (!file.isFile || from.size != to.size || from.isEmpty()) return false
+        val chunkSize = 1024 * 1024
+        val overlap = from.size - 1
+        val buf = ByteArray(chunkSize + overlap)
+        var found = false
+
+        file.inputStream().use { input ->
+            var carry = 0
+            while (true) {
+                val read = input.read(buf, carry, chunkSize)
+                if (read <= 0) break
+                val total = carry + read
+                if (indexOfBytes(buf, total, from) >= 0) {
+                    found = true
+                    break
+                }
+                if (total >= overlap) {
+                    System.arraycopy(buf, total - overlap, buf, 0, overlap)
+                    carry = overlap
+                } else {
+                    carry = total
+                }
+            }
+        }
+        if (!found) return false
+
+        val tmp = File(file.parentFile, "${file.name}.agypatch.${Os.getpid()}.tmp")
+        var patched = false
+        try {
+            val origMode = runCatching { Os.stat(file.absolutePath).st_mode and 0b111111111111 }.getOrDefault(0b111101101)
+            file.inputStream().use { input ->
+                tmp.outputStream().use { output ->
+                    var carry = 0
+                    while (true) {
+                        val read = input.read(buf, carry, chunkSize)
+                        if (read <= 0) break
+                        val total = carry + read
+                        var pos = 0
+                        while (pos <= total - from.size) {
+                            val idx = indexOfBytes(buf, total, from, pos)
+                            if (idx < 0) break
+                            System.arraycopy(to, 0, buf, idx, to.size)
+                            patched = true
+                            pos = idx + to.size
+                        }
+                        val emitLen = if (read < chunkSize) total else (total - overlap).coerceAtLeast(0)
+                        if (emitLen > 0) {
+                            output.write(buf, 0, emitLen)
+                        }
+                        val rem = total - emitLen
+                        if (rem > 0) {
+                            System.arraycopy(buf, emitLen, buf, 0, rem)
+                        }
+                        carry = rem
+                    }
+                    if (carry > 0) {
+                        output.write(buf, 0, carry)
+                    }
+                    output.flush()
+                }
+            }
+            runCatching { Os.chmod(tmp.absolutePath, origMode) }
+            if (!tmp.renameTo(file)) {
+                tmp.delete()
+                return false
+            }
+            return patched
+        } catch (_: Exception) {
+            runCatching { tmp.delete() }
+            return false
+        }
+    }
+
+    suspend fun applyRegionEligibilityPatch(enable: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val from = if (enable) BYTES_INELIGIBLE else BYTES_INEXIGIBLE
+        val to = if (enable) BYTES_INEXIGIBLE else BYTES_INELIGIBLE
+        var anyPatched = false
+        for (target in findRegionPatchTargets()) {
+            if (replaceSameLengthInFile(target, from, to)) {
+                anyPatched = true
+            }
+        }
+        anyPatched
     }
 
     @JvmStatic

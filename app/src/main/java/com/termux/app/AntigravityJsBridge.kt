@@ -30,6 +30,8 @@ object AntigravityJsBridge {
                         window.AntigravityAndroid.onAgentJobFinished(String(payload.summary || 'Agent finished its task'));
                     } else if (action === 'quota_exhausted' && typeof window.AntigravityAndroid.onQuotaExhausted === 'function') {
                         window.AntigravityAndroid.onQuotaExhausted(String(payload.reason || 'quota_exhausted'));
+                    } else if (action === 'region_blocked' && typeof window.AntigravityAndroid.onRegionBlocked === 'function') {
+                        window.AntigravityAndroid.onRegionBlocked(String(payload.reason || 'region_blocked'), Boolean(payload.isIpBlock));
                     }
                 } catch (e) {}
             }
@@ -133,13 +135,43 @@ object AntigravityJsBridge {
                 sendNative('quota_exhausted', { reason: String(reason || 'quota_exhausted').slice(0, 240) });
             }
 
+            var lastRegionSignalAt = 0;
+            function classifyRegionBlock(txt) {
+                if (!txt) return null;
+                var lower = String(txt).toLowerCase();
+                if (lower.indexOf('user location is not supported') !== -1) {
+                    return { isIpBlock: true, reason: 'User location is not supported' };
+                }
+                if (lower.indexOf('"ineligible":true') !== -1 ||
+                    lower.indexOf('"ineligible": true') !== -1 ||
+                    lower.indexOf('"ineligible_tiers"') !== -1 ||
+                    lower.indexOf('"ineligibletiers"') !== -1 ||
+                    lower.indexOf('region is not supported') !== -1 ||
+                    lower.indexOf('not available in your region') !== -1 ||
+                    lower.indexOf('not available in your country') !== -1 ||
+                    lower.indexOf('account is not eligible') !== -1 ||
+                    lower.indexOf('unsupported region') !== -1) {
+                    return { isIpBlock: false, reason: String(txt).slice(0, 240) };
+                }
+                return null;
+            }
+            function signalRegionIfMatched(txt) {
+                var hit = classifyRegionBlock(txt);
+                if (!hit) return;
+                var now = Date.now();
+                if (now - lastRegionSignalAt < 15000) return;
+                lastRegionSignalAt = now;
+                sendNative('region_blocked', hit);
+            }
+
             if (window.fetch && !window.__agyFetchWrapped) {
                 window.__agyFetchWrapped = true;
                 var origFetch = window.fetch;
                 window.fetch = function() {
                     return origFetch.apply(this, arguments).then(function(resp) {
                         try {
-                            if (resp && (resp.status === 429 || (!resp.ok && resp.status >= 400))) {
+                            var ct = (resp && resp.headers && resp.headers.get('content-type')) || '';
+                            if (resp && (resp.status === 429 || (!resp.ok && resp.status >= 400) || ct.indexOf('application/json') !== -1)) {
                                 var cl = parseInt((resp.headers && resp.headers.get('content-length')) || '0', 10);
                                 if (!cl || cl <= 65536) {
                                     resp.clone().text().then(function(body) {
@@ -150,6 +182,7 @@ object AntigravityJsBridge {
                                         } else if (isQuotaText(body)) {
                                             signalQuota(body);
                                         }
+                                        signalRegionIfMatched(body);
                                     }).catch(function() {
                                         if (resp.status === 429) signalQuota('HTTP 429 rate limit');
                                     });
@@ -176,8 +209,11 @@ object AntigravityJsBridge {
                                     if (!txt429 || isQuotaText(txt429)) {
                                         signalQuota(txt429 || 'XHR 429 rate limit');
                                     }
-                                } else if (this.status >= 400 && typeof this.responseText === 'string' && this.responseText.length <= 65536 && isQuotaText(this.responseText)) {
-                                    signalQuota(this.responseText);
+                                } else if (typeof this.responseText === 'string' && this.responseText.length <= 65536) {
+                                    if (this.status >= 400 && isQuotaText(this.responseText)) {
+                                        signalQuota(this.responseText);
+                                    }
+                                    signalRegionIfMatched(this.responseText);
                                 }
                             } catch (e) {}
                         });

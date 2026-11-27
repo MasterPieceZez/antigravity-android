@@ -121,6 +121,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private var isSwitchingAccount = false
     @Volatile
     private var lastQuotaTriggerAt = 0L
+    private var lastRegionPromptAt = 0L
+    private var isRegionDialogShowing = false
     private val serviceStoppedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             Logger.logDebug(LOG_TAG, "Received service stop broadcast, finishing activity")
@@ -382,6 +384,14 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 handleQuotaExhaustedSignal(reason)
             }
         }
+
+        @JavascriptInterface
+        fun onRegionBlocked(reason: String?, isIpBlock: Boolean) {
+            runOnUiThread {
+                if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) return@runOnUiThread
+                handleRegionBlockedSignal(reason, isIpBlock)
+            }
+        }
     }
 
     private fun injectAgentNotificationBridge() {
@@ -489,6 +499,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     "quota_exhausted" -> {
                         val reason = json.optString("reason", "quota_exhausted")
                         runOnUiThread { handleQuotaExhaustedSignal(reason) }
+                    }
+                    "region_blocked" -> {
+                        val reason = json.optString("reason", "region_blocked")
+                        val isIpBlock = json.optBoolean("isIpBlock", false)
+                        runOnUiThread { handleRegionBlockedSignal(reason, isIpBlock) }
                     }
                 }
             }
@@ -788,6 +803,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 }
                 override fun onAddAccount() = startAddAccountFlow()
                 override fun onSwitchAccount(account: AccountProfile) = switchAccountNow(account)
+                override fun onToggleRegionBypass(enabled: Boolean) = toggleRegionBypassAndRestart(enabled)
                 override fun onReloadWebView() {
                     val url = currentHubUrl ?: AntigravityEngine.parseHubUrlFromLog()
                     if (url != null) {
@@ -1381,6 +1397,74 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 isSwitchingAccount = false
             }
         }
+    }
+
+    private fun toggleRegionBypassAndRestart(enabled: Boolean) {
+        AntigravityEngine.setRegionBypassEnabled(this, enabled)
+        txtReconnectBanner.text = if (enabled) {
+            "Applying region eligibility bypass & restarting Hub..."
+        } else {
+            "Reverting region eligibility bypass & restarting Hub..."
+        }
+        reconnectBanner.visibility = View.VISIBLE
+
+        lifecycleScope.launch {
+            AntigravityEngine.stopBackgroundProcessesSuspend()
+            val patched = AntigravityEngine.applyRegionEligibilityPatch(enabled)
+            val newUrl = AntigravityEngine.restartHub(this@AntigravityMainActivity, skipStop = true) { oauthUrl ->
+                openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
+            }
+            if (isFinishing || isDestroyed) return@launch
+            if (newUrl != null) {
+                currentHubUrl = newUrl
+                reconnectBanner.visibility = View.GONE
+                webView.loadUrl(newUrl)
+                val msg = when {
+                    enabled && patched -> "Region eligibility bypass enabled"
+                    enabled -> "Region bypass saved (binary already patched or not found)"
+                    patched -> "Region eligibility bypass disabled"
+                    else -> "Region bypass disabled"
+                }
+                Toast.makeText(this@AntigravityMainActivity, msg, Toast.LENGTH_LONG).show()
+            } else {
+                reconnectBanner.visibility = View.GONE
+                Toast.makeText(this@AntigravityMainActivity, "Failed to restart Hub — check Hub Logs", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun handleRegionBlockedSignal(reason: String?, isIpBlock: Boolean) {
+        val now = System.currentTimeMillis()
+        if (isFinishing || isDestroyed || isRegionDialogShowing || now - lastRegionPromptAt < 15_000L) return
+        lastRegionPromptAt = now
+        isRegionDialogShowing = true
+
+        val alreadyEnabled = AntigravityEngine.isRegionBypassEnabled(this)
+        val builder = AlertDialog.Builder(this)
+            .setOnDismissListener { isRegionDialogShowing = false }
+
+        if (!alreadyEnabled && !isIpBlock) {
+            builder
+                .setTitle("Account Region Not Supported")
+                .setMessage(
+                    "Google reported that this account's region isn't eligible for Antigravity.\n\n" +
+                    "Enable the Region Eligibility Bypass? This patches the local client and restarts the Hub. " +
+                    "You can turn it off anytime in Control Center."
+                )
+                .setPositiveButton("Enable & Restart Hub") { _, _ ->
+                    toggleRegionBypassAndRestart(true)
+                }
+                .setNegativeButton("Dismiss", null)
+        } else {
+            builder
+                .setTitle("Location Blocked by Google")
+                .setMessage(
+                    "Google blocked this request due to IP/location (\"User location is not supported\").\n\n" +
+                    "The account region bypass cannot override IP blocks — connect to a supported VPN region and reload."
+                )
+                .setPositiveButton("OK", null)
+        }
+        builder.show()
     }
 
     private fun handleQuotaExhaustedSignal(reason: String?) {
