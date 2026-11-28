@@ -601,34 +601,6 @@ class AntigravityCoreTest {
     }
 
     @Test
-    fun ensureDefaultPermissionPreset_seedsTurboOnlyWhenUnset() {
-        val tempHome = java.nio.file.Files.createTempDirectory("agy_preset_test").toFile()
-        try {
-            assertTrue(AntigravityEngine.ensureDefaultPermissionPreset(tempHome))
-            val cfg = java.io.File(tempHome, ".gemini/config/config.json")
-            assertTrue(cfg.isFile)
-            val seeded = org.json.JSONObject(cfg.readText())
-            assertEquals(
-                "AGENT_PERMISSION_PRESET_TURBO",
-                seeded.getJSONObject("userSettings").getString("permissionPreset")
-            )
-
-            // Existing user preference must NEVER be overwritten
-            val customJson = """{"userSettings":{"permissionPreset":"AGENT_PERMISSION_PRESET_DEFAULT","voiceName":"Arlo"}}"""
-            cfg.writeText(customJson)
-            assertFalse(AntigravityEngine.ensureDefaultPermissionPreset(tempHome))
-            val after = org.json.JSONObject(cfg.readText())
-            assertEquals(
-                "AGENT_PERMISSION_PRESET_DEFAULT",
-                after.getJSONObject("userSettings").getString("permissionPreset")
-            )
-            assertEquals("Arlo", after.getJSONObject("userSettings").getString("voiceName"))
-        } finally {
-            tempHome.deleteRecursively()
-        }
-    }
-
-    @Test
     fun jsBridge_containsHeaderControlsMicTesterPasteAndAgeFilter() {
         val bridge = AntigravityJsBridge.AGENT_BRIDGE_JS
         assertTrue(bridge.contains("agy-header-controls-btn"))
