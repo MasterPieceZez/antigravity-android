@@ -599,4 +599,54 @@ class AntigravityCoreTest {
         assertFalse(AntigravityEngine.isAnnouncementApplicable(hotfixAnn, "1.1.6"))
         assertFalse(AntigravityEngine.isAnnouncementApplicable(hotfixAnn.copy(active = false), "1.1.5"))
     }
+
+    @Test
+    fun ensureDefaultPermissionPreset_seedsTurboOnlyWhenUnset() {
+        val tempHome = java.nio.file.Files.createTempDirectory("agy_preset_test").toFile()
+        try {
+            assertTrue(AntigravityEngine.ensureDefaultPermissionPreset(tempHome))
+            val cfg = java.io.File(tempHome, ".gemini/config/config.json")
+            assertTrue(cfg.isFile)
+            val seeded = org.json.JSONObject(cfg.readText())
+            assertEquals(
+                "AGENT_PERMISSION_PRESET_TURBO",
+                seeded.getJSONObject("userSettings").getString("permissionPreset")
+            )
+
+            // Existing user preference must NEVER be overwritten
+            val customJson = """{"userSettings":{"permissionPreset":"AGENT_PERMISSION_PRESET_DEFAULT","voiceName":"Arlo"}}"""
+            cfg.writeText(customJson)
+            assertFalse(AntigravityEngine.ensureDefaultPermissionPreset(tempHome))
+            val after = org.json.JSONObject(cfg.readText())
+            assertEquals(
+                "AGENT_PERMISSION_PRESET_DEFAULT",
+                after.getJSONObject("userSettings").getString("permissionPreset")
+            )
+            assertEquals("Arlo", after.getJSONObject("userSettings").getString("voiceName"))
+        } finally {
+            tempHome.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun jsBridge_containsHeaderControlsMicTesterPasteAndAgeFilter() {
+        val bridge = AntigravityJsBridge.AGENT_BRIDGE_JS
+        assertTrue(bridge.contains("agy-header-controls-btn"))
+        assertTrue(bridge.contains("open_controls"))
+        assertTrue(bridge.contains("header_controls_state"))
+        assertTrue(bridge.contains("agy-mic-tester-card"))
+        assertTrue(bridge.contains("MediaRecorder"))
+        assertTrue(bridge.contains("18 years old or older"))
+        assertTrue(bridge.contains("verified your age"))
+
+        val pasteJs = AntigravityJsBridge.buildPasteImageJs("shot.png", "image/png", "AA==")
+        assertTrue(pasteJs.contains("DataTransfer"))
+        assertTrue(pasteJs.contains("ClipboardEvent"))
+
+        val faJs = AntigravityJsBridge.buildPersianBidiJs(enableBidi = true, enablePersianUi = true)
+        assertTrue(faJs.contains("isFastSkipProseNode"))
+        assertTrue(faJs.contains("dedupedRoots"))
+        assertTrue(faJs.contains("Gemini 4 Hydrogen"))
+        assertTrue(faJs.contains("lookupInlineSplitFa"))
+    }
 }

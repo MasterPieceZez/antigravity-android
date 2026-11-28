@@ -515,6 +515,21 @@
                     android:textColor="@color/agy_text_secondary"
                     android:textSize="12sp"
                     android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/btn_onboarding_cancel_install"
+                    android:layout_width="match_parent"
+                    android:layout_height="40dp"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/agy_btn_secondary"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:text="@string/agy_btn_cancel"
+                    android:textColor="@color/agy_danger"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
             </LinearLayout>
         </LinearLayout>
     </ScrollView>

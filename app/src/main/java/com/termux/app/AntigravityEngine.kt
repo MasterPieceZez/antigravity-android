@@ -223,6 +223,8 @@ object AntigravityEngine {
                 runCatching { Os.symlink("/storage/emulated/0", sharedLink.absolutePath) }
             }
 
+            ensureDefaultPermissionPreset()
+
             val localBinDir = File("$HOME_DIR/.local/bin")
             if (!localBinDir.exists()) localBinDir.mkdirs()
             val xdgOut = File(localBinDir, "xdg-open")
@@ -383,9 +385,130 @@ object AntigravityEngine {
         return compareSemver(candidateTag, currentTag) > 0
     }
 
-    suspend fun checkLatestRelease(): Result<UpdateReleaseInfo> = withContext(Dispatchers.IO) {
+    fun ensureDefaultPermissionPreset(homeDir: File = File(HOME_DIR)): Boolean {
+        return runCatching {
+            val configDir = File(homeDir, ".gemini/config")
+            if (!configDir.exists()) configDir.mkdirs()
+            val configFile = File(configDir, "config.json")
+            val root = if (configFile.isFile) {
+                val raw = configFile.readText(Charsets.UTF_8).trim()
+                if (raw.isEmpty()) JSONObject() else JSONObject(raw)
+            } else {
+                JSONObject()
+            }
+            val existingSettings = root.optJSONObject("userSettings")
+            if (existingSettings != null) {
+                val existingPreset = existingSettings.optString("permissionPreset", "").trim()
+                val hasPreset = existingPreset.isNotEmpty() && existingPreset != "AGENT_PERMISSION_PRESET_UNSPECIFIED"
+                val hasAutoExec = existingSettings.optString("autoExecutionPolicy", "").trim().isNotEmpty()
+                val hasMigrated = existingSettings.optBoolean("permissionGrantsV2Migrated", false)
+                if (hasPreset || hasAutoExec || hasMigrated) {
+                    return@runCatching false
+                }
+            }
+            val userSettings = existingSettings ?: JSONObject()
+            userSettings.put("permissionPreset", "AGENT_PERMISSION_PRESET_TURBO")
+            if (!userSettings.has("autoExecutionPolicy")) {
+                userSettings.put("autoExecutionPolicy", "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER")
+            }
+            if (!userSettings.has("browserJsExecutionPolicy")) {
+                userSettings.put("browserJsExecutionPolicy", "BROWSER_JS_EXECUTION_POLICY_TURBO")
+            }
+            if (!userSettings.has("nonWorkspaceFileAccessPolicy")) {
+                userSettings.put("nonWorkspaceFileAccessPolicy", "AGENT_SETTING_POLICY_ALLOW")
+            }
+            if (!userSettings.has("enableTerminalSandbox")) {
+                userSettings.put("enableTerminalSandbox", false)
+            }
+            userSettings.put("permissionGrantsV2Migrated", true)
+            root.put("userSettings", userSettings)
+
+            val tmpFile = File(configDir, "${configFile.name}.tmp")
+            tmpFile.writeText(root.toString(2) + "\n", Charsets.UTF_8)
+            runCatching { Os.chmod(tmpFile.absolutePath, 0b110000000) } // 0600
+            if (!tmpFile.renameTo(configFile)) {
+                configFile.writeText(root.toString(2) + "\n", Charsets.UTF_8)
+                runCatching { Os.chmod(configFile.absolutePath, 0b110000000) }
+                tmpFile.delete()
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun parseReleaseJson(json: JSONObject): UpdateReleaseInfo {
+        val tag = json.optString("tag_name", "").trim()
+        val htmlUrl = json.optString("html_url", "https://github.com/MasterPieceZez/antigravity-android/releases")
+        val releaseName = json.optString("name", "").trim()
+        val releaseBody = json.optString("body", "").trim()
+        val primaryAbi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+        var universalLiteUrl: String? = null
+        var universalLiteName: String? = null
+        var abiLiteUrl: String? = null
+        var abiLiteName: String? = null
+        var abiStandaloneUrl: String? = null
+        var abiStandaloneName: String? = null
+        var universalStandaloneUrl: String? = null
+        var universalStandaloneName: String? = null
+        var checksumsUrl: String? = null
+        val assets = json.optJSONArray("assets")
+        if (assets != null) {
+            for (i in 0 until assets.length()) {
+                val a = assets.optJSONObject(i) ?: continue
+                val name = a.optString("name", "")
+                val dlUrl = a.optString("browser_download_url", "").ifBlank { null } ?: continue
+                if (name.equals("SHA256SUMS.txt", ignoreCase = true)) {
+                    checksumsUrl = dlUrl
+                    continue
+                }
+                if (!name.endsWith(".apk", ignoreCase = true)) continue
+                val lower = name.lowercase()
+                when {
+                    lower.contains("universal") && lower.contains("lite") -> {
+                        universalLiteUrl = dlUrl
+                        universalLiteName = name
+                    }
+                    lower.contains(primaryAbi.lowercase()) && lower.contains("lite") -> {
+                        abiLiteUrl = dlUrl
+                        abiLiteName = name
+                    }
+                    lower.contains(primaryAbi.lowercase()) -> {
+                        abiStandaloneUrl = dlUrl
+                        abiStandaloneName = name
+                    }
+                    lower.contains("universal") -> {
+                        universalStandaloneUrl = dlUrl
+                        universalStandaloneName = name
+                    }
+                }
+            }
+        }
+        val bestLite = universalLiteUrl ?: abiLiteUrl
+        val bestApk = bestLite ?: abiStandaloneUrl ?: universalStandaloneUrl
+        val bestName = when (bestApk) {
+            universalLiteUrl -> universalLiteName
+            abiLiteUrl -> abiLiteName
+            abiStandaloneUrl -> abiStandaloneName
+            universalStandaloneUrl -> universalStandaloneName
+            else -> null
+        }
+        return UpdateReleaseInfo(
+            tagName = tag,
+            releaseUrl = htmlUrl,
+            downloadApkUrl = bestApk,
+            isLiteApk = bestLite != null,
+            apkFileName = bestName,
+            checksumsUrl = checksumsUrl,
+            releaseName = releaseName,
+            releaseBody = releaseBody
+        )
+    }
+
+    suspend fun checkLatestRelease(context: Context? = null): Result<UpdateReleaseInfo> = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
+            val prefs = context?.getSharedPreferences(PREFS_ENGINE, Context.MODE_PRIVATE)
+            val cachedEtag = prefs?.getString("release_etag", null)?.trim()
+            val cachedJson = prefs?.getString("release_cached_json", null)?.trim()
             conn = URL("https://api.github.com/repos/MasterPieceZez/antigravity-android/releases/latest")
                 .openConnection() as HttpURLConnection
             conn.connectTimeout = 5000
@@ -393,77 +516,27 @@ object AntigravityEngine {
             conn.requestMethod = "GET"
             conn.setRequestProperty("Accept", "application/vnd.github+json")
             conn.setRequestProperty("User-Agent", "AntigravityAndroid/${BuildConfig.VERSION_NAME}")
-            if (conn.responseCode !in 200..299) {
-                return@withContext Result.failure(IllegalStateException("HTTP ${conn.responseCode}"))
+            if (!cachedEtag.isNullOrBlank() && !cachedJson.isNullOrBlank()) {
+                conn.setRequestProperty("If-None-Match", cachedEtag)
             }
-            val json = JSONObject(conn.inputStream.bufferedReader().readText())
-            val tag = json.optString("tag_name", "").trim()
-            val htmlUrl = json.optString("html_url", "https://github.com/MasterPieceZez/antigravity-android/releases")
-            val releaseName = json.optString("name", "").trim()
-            val releaseBody = json.optString("body", "").trim()
-            val primaryAbi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
-            var universalLiteUrl: String? = null
-            var universalLiteName: String? = null
-            var abiLiteUrl: String? = null
-            var abiLiteName: String? = null
-            var abiStandaloneUrl: String? = null
-            var abiStandaloneName: String? = null
-            var universalStandaloneUrl: String? = null
-            var universalStandaloneName: String? = null
-            var checksumsUrl: String? = null
-            val assets = json.optJSONArray("assets")
-            if (assets != null) {
-                for (i in 0 until assets.length()) {
-                    val a = assets.optJSONObject(i) ?: continue
-                    val name = a.optString("name", "")
-                    val dlUrl = a.optString("browser_download_url", "").ifBlank { null } ?: continue
-                    if (name.equals("SHA256SUMS.txt", ignoreCase = true)) {
-                        checksumsUrl = dlUrl
-                        continue
-                    }
-                    if (!name.endsWith(".apk", ignoreCase = true)) continue
-                    val lower = name.lowercase()
-                    when {
-                        lower.contains("universal") && lower.contains("lite") -> {
-                            universalLiteUrl = dlUrl
-                            universalLiteName = name
-                        }
-                        lower.contains(primaryAbi.lowercase()) && lower.contains("lite") -> {
-                            abiLiteUrl = dlUrl
-                            abiLiteName = name
-                        }
-                        lower.contains(primaryAbi.lowercase()) -> {
-                            abiStandaloneUrl = dlUrl
-                            abiStandaloneName = name
-                        }
-                        lower.contains("universal") -> {
-                            universalStandaloneUrl = dlUrl
-                            universalStandaloneName = name
-                        }
-                    }
-                }
+            val code = conn.responseCode
+            if (code == HttpURLConnection.HTTP_NOT_MODIFIED && !cachedJson.isNullOrBlank()) {
+                return@withContext Result.success(parseReleaseJson(JSONObject(cachedJson)))
             }
-            val bestLite = universalLiteUrl ?: abiLiteUrl
-            val bestApk = bestLite ?: abiStandaloneUrl ?: universalStandaloneUrl
-            val bestName = when (bestApk) {
-                universalLiteUrl -> universalLiteName
-                abiLiteUrl -> abiLiteName
-                abiStandaloneUrl -> abiStandaloneName
-                universalStandaloneUrl -> universalStandaloneName
-                else -> null
+            if (code !in 200..299) {
+                return@withContext Result.failure(IllegalStateException("HTTP $code"))
             }
-            Result.success(
-                UpdateReleaseInfo(
-                    tagName = tag,
-                    releaseUrl = htmlUrl,
-                    downloadApkUrl = bestApk,
-                    isLiteApk = bestLite != null,
-                    apkFileName = bestName,
-                    checksumsUrl = checksumsUrl,
-                    releaseName = releaseName,
-                    releaseBody = releaseBody
-                )
-            )
+            val bodyText = conn.inputStream.bufferedReader().readText()
+            val json = JSONObject(bodyText)
+            val info = parseReleaseJson(json)
+            if (prefs != null) {
+                val newEtag = conn.getHeaderField("ETag")?.trim()
+                prefs.edit().apply {
+                    if (!newEtag.isNullOrBlank()) putString("release_etag", newEtag) else remove("release_etag")
+                    putString("release_cached_json", bodyText)
+                }.apply()
+            }
+            Result.success(info)
         } catch (e: Exception) {
             Result.failure(e)
         } finally {
@@ -478,9 +551,29 @@ object AntigravityEngine {
         return true
     }
 
-    suspend fun checkPublicAnnouncement(): Result<PublicAnnouncement?> = withContext(Dispatchers.IO) {
+    private fun parseAnnouncementJson(json: JSONObject): PublicAnnouncement {
+        val rawUrl = json.optString("url", "").trim()
+        val safeUrl = if (rawUrl.startsWith("https://", ignoreCase = true)) rawUrl else ""
+        return PublicAnnouncement(
+            id = json.optString("id", "").trim(),
+            title = json.optString("title", "").trim(),
+            titleFa = json.optString("title_fa", "").trim(),
+            message = json.optString("message", "").trim(),
+            messageFa = json.optString("message_fa", "").trim(),
+            minVersion = json.optString("min_version", "").trim(),
+            maxVersion = json.optString("max_version", "").trim(),
+            url = safeUrl,
+            urgent = json.optBoolean("urgent", false),
+            active = json.optBoolean("active", false)
+        )
+    }
+
+    suspend fun checkPublicAnnouncement(context: Context? = null): Result<PublicAnnouncement?> = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
+            val prefs = context?.getSharedPreferences(PREFS_ENGINE, Context.MODE_PRIVATE)
+            val cachedEtag = prefs?.getString("announcement_etag", null)?.trim()
+            val cachedJson = prefs?.getString("announcement_cached_json", null)?.trim()
             conn = URL("https://raw.githubusercontent.com/MasterPieceZez/antigravity-android/main/announcement.json")
                 .openConnection() as HttpURLConnection
             conn.connectTimeout = 5000
@@ -489,27 +582,29 @@ object AntigravityEngine {
             conn.setRequestProperty("Accept", "application/json")
             conn.setRequestProperty("Cache-Control", "no-cache")
             conn.setRequestProperty("User-Agent", "AntigravityAndroid/${BuildConfig.VERSION_NAME}")
-            if (conn.responseCode == 404) {
+            if (!cachedEtag.isNullOrBlank() && !cachedJson.isNullOrBlank()) {
+                conn.setRequestProperty("If-None-Match", cachedEtag)
+            }
+            val code = conn.responseCode
+            if (code == HttpURLConnection.HTTP_NOT_MODIFIED && !cachedJson.isNullOrBlank()) {
+                val ann = parseAnnouncementJson(JSONObject(cachedJson))
+                return@withContext Result.success(if (ann.active) ann else null)
+            }
+            if (code == 404) {
                 return@withContext Result.success(null)
             }
-            if (conn.responseCode !in 200..299) {
-                return@withContext Result.failure(IllegalStateException("HTTP ${conn.responseCode}"))
+            if (code !in 200..299) {
+                return@withContext Result.failure(IllegalStateException("HTTP $code"))
             }
-            val json = JSONObject(conn.inputStream.bufferedReader().readText())
-            val rawUrl = json.optString("url", "").trim()
-            val safeUrl = if (rawUrl.startsWith("https://", ignoreCase = true)) rawUrl else ""
-            val ann = PublicAnnouncement(
-                id = json.optString("id", "").trim(),
-                title = json.optString("title", "").trim(),
-                titleFa = json.optString("title_fa", "").trim(),
-                message = json.optString("message", "").trim(),
-                messageFa = json.optString("message_fa", "").trim(),
-                minVersion = json.optString("min_version", "").trim(),
-                maxVersion = json.optString("max_version", "").trim(),
-                url = safeUrl,
-                urgent = json.optBoolean("urgent", false),
-                active = json.optBoolean("active", false)
-            )
+            val bodyText = conn.inputStream.bufferedReader().readText()
+            val ann = parseAnnouncementJson(JSONObject(bodyText))
+            if (prefs != null) {
+                val newEtag = conn.getHeaderField("ETag")?.trim()
+                prefs.edit().apply {
+                    if (!newEtag.isNullOrBlank()) putString("announcement_etag", newEtag) else remove("announcement_etag")
+                    putString("announcement_cached_json", bodyText)
+                }.apply()
+            }
             Result.success(if (ann.active) ann else null)
         } catch (e: Exception) {
             Result.failure(e)
@@ -630,6 +725,8 @@ object AntigravityEngine {
             startMutex.withLock {
                 if (forceProvision || !assetsProvisioned || !File("$BRIDGE_DIR/start_hub.sh").isFile) {
                     provisionBridgeAssets(context)
+                } else {
+                    ensureDefaultPermissionPreset()
                 }
                 val pb = ProcessBuilder(BASH_BIN, "$BRIDGE_DIR/start_hub.sh")
                 pb.directory(File(HOME_DIR))

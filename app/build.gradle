@@ -45,7 +45,7 @@ android {
         minSdkVersion project.properties.minSdkVersion.toInteger()
         targetSdkVersion project.properties.targetSdkVersion.toInteger()
         versionCode 120
-        versionName "1.1.6"
+        versionName "1.2.0-rc1"
 
         buildConfigField "String", "TERMUX_PACKAGE_VARIANT", "\"" + project.ext.packageVariant + "\""
         buildConfigField "boolean", "AGY_LITE_UPDATE", project.ext.liteUpdate.toString()

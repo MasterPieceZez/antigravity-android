@@ -157,9 +157,17 @@
     <string name="agy_toast_cache_cleared">WebView cache cleared — reloading…</string>
     <string name="agy_toast_install_running">Installation already in progress…</string>
     <string name="agy_install_starting">Starting automatic Antigravity CLI install…</string>
+    <string name="agy_install_stalled_warning">Install appears stalled (25s+ with no progress). Check network/VPN or tap Cancel.</string>
+    <string name="agy_install_cancelled">Installation cancelled</string>
+    <string name="agy_toast_install_cancelled">Installation cancelled</string>
     <string name="agy_toast_installed_booting">Installed! Booting Antigravity…</string>
     <string name="agy_install_failed_status">Install failed: %1$s</string>
     <string name="agy_toast_auto_install_failed">Auto-install failed: %1$s</string>
+    <string name="agy_dialog_attach_title">Attach</string>
+    <string name="agy_attach_photos_gallery">Photos &amp; Gallery</string>
+    <string name="agy_attach_files_documents">Files &amp; Documents</string>
+    <string name="agy_toast_pasted_image_too_large">Pasted image exceeds 15 MB limit</string>
+    <string name="agy_toast_pasted_image_failed">Could not attach pasted image</string>
     <string name="agy_toast_port_cmd_copied">Copied Termux port command to clipboard</string>
     <string name="agy_toast_hub_timeout">Hub startup timed out — check Control Center or Built-in Terminal</string>
     <string name="agy_banner_oauth_browser">Complete Google Sign-In in browser…</string>

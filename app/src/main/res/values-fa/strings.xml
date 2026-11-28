@@ -213,9 +213,17 @@
     <string name="agy_toast_cache_cleared">کش WebView پاک شد — در حال بارگذاری مجدد…</string>
     <string name="agy_toast_install_running">نصب هم‌اکنون در حال انجام است…</string>
     <string name="agy_install_starting">در حال شروع نصب خودکار CLI آنتی‌گرویتی…</string>
+    <string name="agy_install_stalled_warning">نصب متوقف به نظر می‌رسد (بیش از ۲۵ ثانیه بدون پیشرفت). اینترنت یا VPN را بررسی کنید یا لغو را بزنید.</string>
+    <string name="agy_install_cancelled">نصب لغو شد</string>
+    <string name="agy_toast_install_cancelled">نصب لغو شد</string>
     <string name="agy_toast_installed_booting">نصب شد! در حال راه‌اندازی آنتی‌گرویتی…</string>
     <string name="agy_install_failed_status">نصب ناموفق بود: %1$s</string>
     <string name="agy_toast_auto_install_failed">نصب خودکار ناموفق بود: %1$s</string>
+    <string name="agy_dialog_attach_title">پیوست</string>
+    <string name="agy_attach_photos_gallery">گالری و تصاویر</string>
+    <string name="agy_attach_files_documents">فایل‌ها و اسناد</string>
+    <string name="agy_toast_pasted_image_too_large">حجم تصویر جای‌گذاری‌شده بیش از سقف ۱۵ مگابایت است</string>
+    <string name="agy_toast_pasted_image_failed">پیوست تصویر جای‌گذاری‌شده ممکن نشد</string>
     <string name="agy_toast_port_cmd_copied">دستور انتقال Termux در کلیپ‌بورد کپی شد</string>
     <string name="agy_toast_hub_timeout">زمان راه‌اندازی هاب به پایان رسید — مرکز کنترل یا ترمینال داخلی را بررسی کنید</string>
     <string name="agy_banner_oauth_browser">ورود با گوگل را در مرورگر تکمیل کنید…</string>

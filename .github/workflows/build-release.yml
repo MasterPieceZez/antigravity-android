@@ -2,7 +2,7 @@ name: Build Antigravity Android APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'dev/**' ]
     tags: [ 'v*' ]
   pull_request:
   workflow_dispatch:
@@ -203,11 +203,12 @@ jobs:
         run: |
           (cd dist && sha256sum *.apk > SHA256SUMS.txt && cat SHA256SUMS.txt)
           ls -lh dist/
+          echo "SAFE_REF=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_ENV"
 
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Antigravity-${{ github.ref_name }}-APKs
+          name: Antigravity-${{ env.SAFE_REF }}-APKs
           path: dist/*
 
       - name: Publish GitHub Release

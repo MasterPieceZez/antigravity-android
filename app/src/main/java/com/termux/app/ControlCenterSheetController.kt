@@ -228,7 +228,7 @@ class ControlCenterSheetController(
         view.findViewById<View>(R.id.sheet_btn_check_update).setOnClickListener {
             Toast.makeText(activity, activity.getString(R.string.agy_toast_checking_updates), Toast.LENGTH_SHORT).show()
             activity.lifecycleScope.launch {
-                val res = AntigravityEngine.checkLatestRelease()
+                val res = AntigravityEngine.checkLatestRelease(activity)
                 if (activity.isFinishing || activity.isDestroyed) return@launch
                 res.onSuccess { info ->
                     val current = "v${BuildConfig.VERSION_NAME}"
@@ -310,6 +310,7 @@ class ControlCenterSheetController(
         accounts: List<AccountProfile>,
         dialog: BottomSheetDialog
     ) {
+        val snap = HubThemeSnapshot.load(activity)
         container.removeAllViews()
         val active = accounts.firstOrNull { it.isActive }
         txtActiveAccount.text = if (active != null) {
@@ -317,11 +318,14 @@ class ControlCenterSheetController(
         } else {
             activity.getString(R.string.agy_active_account_none)
         }
+        if (snap != null) {
+            txtActiveAccount.setTextColor(snap.textPrimary)
+        }
 
         if (accounts.isEmpty()) {
             val emptyTv = TextView(activity).apply {
                 text = activity.getString(R.string.agy_accounts_empty)
-                setTextColor(activity.getColor(R.color.agy_text_secondary))
+                setTextColor(snap?.textSecondary ?: activity.getColor(R.color.agy_text_secondary))
                 textSize = 12f
             }
             container.addView(emptyTv)
@@ -358,7 +362,7 @@ class ControlCenterSheetController(
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
             row.addView(label)
-            HubThemeSnapshot.load(activity)?.applyToAccountRow(row, label, acct.isActive)
+            snap?.applyToAccountRow(row, label, acct.isActive)
 
             if (!acct.isActive) {
                 val btnSwitch = TextView(activity).apply {
@@ -373,11 +377,12 @@ class ControlCenterSheetController(
                         callbacks.onSwitchAccount(acct)
                     }
                 }
+                snap?.applyToPrimaryButton(btnSwitch)
                 row.addView(btnSwitch)
 
                 val btnDelete = TextView(activity).apply {
                     text = "✕"
-                    setTextColor(activity.getColor(R.color.agy_text_secondary))
+                    setTextColor(snap?.textSecondary ?: activity.getColor(R.color.agy_text_secondary))
                     textSize = 13f
                     setPadding((10 * dp).toInt(), (4 * dp).toInt(), (4 * dp).toInt(), (4 * dp).toInt())
                     setOnClickListener {

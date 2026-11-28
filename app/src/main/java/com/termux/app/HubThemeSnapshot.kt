@@ -3,13 +3,17 @@ package com.termux.app
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.Switch
 import android.widget.TextView
+import com.termux.R
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
@@ -85,7 +89,17 @@ data class HubThemeSnapshot(
         if (firstChild !== root) {
             firstChild.background = null
         }
-        styleCardsRecursively(firstChild, dp, strokePx)
+        if (firstChild is ViewGroup && firstChild.childCount > 0) {
+            val dragHandle = firstChild.getChildAt(0)
+            if (dragHandle !is TextView && dragHandle !is ViewGroup) {
+                dragHandle.background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = 999f * dp
+                    setColor(effectiveBorderColor(0.85f))
+                }
+            }
+        }
+        styleControlViewsRecursively(firstChild, dp, strokePx)
     }
 
     fun applyToAccountRow(row: LinearLayout, label: TextView, isActive: Boolean) {
@@ -94,42 +108,143 @@ data class HubThemeSnapshot(
         row.background = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = cornerRadiusDp.coerceIn(8f, 14f) * dp
-            setColor(withAlpha(cardBg, 0.92f))
-            setStroke(strokePx, withAlpha(borderColor, 0.70f))
+            setColor(effectiveSecondarySurfaceColor())
+            setStroke(strokePx, effectiveBorderColor(0.75f))
         }
         label.setTextColor(if (isActive) accentColor else textPrimary)
     }
 
-    private fun styleCardsRecursively(view: View, dp: Float, strokePx: Int) {
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) {
-                val child = view.getChildAt(i)
-                val bg = child.background
-                if (child is LinearLayout && bg != null && child.paddingLeft > 0) {
-                    val cardDrawable = GradientDrawable().apply {
+    fun applyToPrimaryButton(btn: TextView) {
+        val dp = btn.resources.displayMetrics.density
+        btn.background = buildPrimaryButtonDrawable(dp)
+        btn.setTextColor(if (isColorDark(accentColor)) Color.WHITE else Color.parseColor("#0F172A"))
+    }
+
+    private fun effectiveBorderColor(alphaFrac: Float): Int {
+        val base = if (!isDark && colorDistance(borderColor, surfaceBg) < 28) {
+            blendColors(surfaceBg, textPrimary, 0.16f)
+        } else {
+            borderColor
+        }
+        return withAlpha(base, alphaFrac)
+    }
+
+    private fun effectiveSecondarySurfaceColor(): Int {
+        return if (!isDark) {
+            if (colorDistance(cardBg, surfaceBg) < 18) {
+                blendColors(surfaceBg, accentColor, 0.06f)
+            } else {
+                blendColors(cardBg, textPrimary, 0.04f)
+            }
+        } else {
+            if (colorDistance(cardBg, surfaceBg) < 12) {
+                blendColors(cardBg, Color.WHITE, 0.06f)
+            } else {
+                withAlpha(cardBg, 0.94f)
+            }
+        }
+    }
+
+    private fun buildSecondaryButtonDrawable(dp: Float, strokePx: Int): Drawable {
+        val radius = cornerRadiusDp.coerceIn(8f, 14f) * dp
+        val shape = GradientDrawable().apply {
+            this.shape = GradientDrawable.RECTANGLE
+            cornerRadius = radius
+            setColor(effectiveSecondarySurfaceColor())
+            setStroke(strokePx, effectiveBorderColor(0.85f))
+        }
+        val rippleColor = withAlpha(if (isDark) Color.WHITE else textPrimary, 0.12f)
+        return RippleDrawable(ColorStateList.valueOf(rippleColor), shape, null)
+    }
+
+    private fun buildPrimaryButtonDrawable(dp: Float): Drawable {
+        val radius = cornerRadiusDp.coerceIn(8f, 14f) * dp
+        val shape = GradientDrawable().apply {
+            this.shape = GradientDrawable.RECTANGLE
+            cornerRadius = radius
+            setColor(accentColor)
+        }
+        val rippleColor = withAlpha(if (isColorDark(accentColor)) Color.WHITE else Color.BLACK, 0.20f)
+        return RippleDrawable(ColorStateList.valueOf(rippleColor), shape, null)
+    }
+
+    private fun styleControlViewsRecursively(view: View, dp: Float, strokePx: Int) {
+        if (view !is ViewGroup) return
+        for (i in 0 until view.childCount) {
+            val child = view.getChildAt(i)
+            when {
+                child is LinearLayout && child.background != null && child.paddingLeft > 0 -> {
+                    val cardSurface = if (!isDark && colorDistance(cardBg, surfaceBg) < 10) {
+                        blendColors(surfaceBg, Color.BLACK, 0.025f)
+                    } else {
+                        withAlpha(cardBg, 0.92f)
+                    }
+                    child.background = GradientDrawable().apply {
                         shape = GradientDrawable.RECTANGLE
                         cornerRadius = cornerRadiusDp.coerceIn(10f, 18f) * dp
-                        setColor(withAlpha(cardBg, 0.90f))
-                        setStroke(strokePx, withAlpha(borderColor, 0.65f))
+                        setColor(cardSurface)
+                        setStroke(strokePx, effectiveBorderColor(0.70f))
                     }
-                    child.background = cardDrawable
                     child.elevation = (shadowDp * 0.4f).coerceIn(2f, 8f) * dp
-                } else if (child is TextView && !isDark) {
-                    val current = child.currentTextColor
-                    // Remap dark-theme light text colors when Hub runs a light theme
-                    val lum = (0.299 * Color.red(current) + 0.587 * Color.green(current) + 0.114 * Color.blue(current)) / 255.0
-                    if (lum > 0.6 && child.background == null) {
-                        child.setTextColor(if (lum > 0.8) textPrimary else textSecondary)
-                    }
                 }
-                styleCardsRecursively(child, dp, strokePx)
+                child is Switch -> {
+                    val isSubtle = child.id == R.id.switch_notify_foreground
+                    child.setTextColor(if (isSubtle) textSecondary else textPrimary)
+                    val checkedThumb = accentColor
+                    val uncheckedThumb = if (isDark) Color.parseColor("#CBD5E1") else Color.parseColor("#FFFFFF")
+                    val checkedTrack = withAlpha(accentColor, 0.45f)
+                    val uncheckedTrack = effectiveBorderColor(0.90f)
+                    val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+                    child.thumbTintList = ColorStateList(states, intArrayOf(checkedThumb, uncheckedThumb))
+                    child.trackTintList = ColorStateList(states, intArrayOf(checkedTrack, uncheckedTrack))
+                }
+                child is TextView && child.id in PRIMARY_BUTTON_IDS -> {
+                    applyToPrimaryButton(child)
+                }
+                child is TextView && child.id in SECONDARY_BUTTON_IDS -> {
+                    child.background = buildSecondaryButtonDrawable(dp, strokePx)
+                    val btnTextColor = when (child.id) {
+                        R.id.sheet_btn_check_update -> accentColor
+                        R.id.sheet_btn_clear_cache,
+                        R.id.sheet_btn_reinstall_cli,
+                        R.id.sheet_btn_phantom_fix -> textSecondary
+                        else -> textPrimary
+                    }
+                    child.setTextColor(btnTextColor)
+                }
+                child is TextView -> {
+                    val current = child.currentTextColor
+                    val lum = (0.299 * Color.red(current) + 0.587 * Color.green(current) + 0.114 * Color.blue(current)) / 255.0
+                    val isSecondary = child.id == R.id.sheet_backup_status || lum < 0.78
+                    child.setTextColor(if (isSecondary) textSecondary else textPrimary)
+                }
             }
+            styleControlViewsRecursively(child, dp, strokePx)
         }
     }
 
     companion object {
         private const val PREFS_NAME = "antigravity_prefs"
         private const val KEY_THEME_JSON = "hub_theme_snapshot_json"
+
+        private val PRIMARY_BUTTON_IDS = setOf(
+            R.id.sheet_btn_add_account,
+            R.id.sheet_btn_restore
+        )
+
+        private val SECONDARY_BUTTON_IDS = setOf(
+            R.id.sheet_btn_reload,
+            R.id.sheet_btn_restart,
+            R.id.sheet_btn_terminal,
+            R.id.sheet_btn_logs,
+            R.id.sheet_btn_clear_cache,
+            R.id.sheet_btn_check_update,
+            R.id.sheet_btn_reinstall_cli,
+            R.id.sheet_btn_test_notif,
+            R.id.sheet_btn_phantom_fix,
+            R.id.sheet_btn_backup_full,
+            R.id.sheet_btn_backup_packages
+        )
 
         fun load(context: Context): HubThemeSnapshot? {
             val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -148,15 +263,22 @@ data class HubThemeSnapshot(
 
         private fun fromJson(json: JSONObject): HubThemeSnapshot {
             val surface = parseCssColor(json.optString("surfaceBg")) ?: Color.parseColor("#11141A")
-            val card = parseCssColor(json.optString("cardBg")) ?: Color.parseColor("#1A1F29")
-            val border = parseCssColor(json.optString("borderColor")) ?: Color.parseColor("#2E3646")
+            val dark = json.optBoolean("isDark", isColorDark(surface))
+            val defaultCard = if (dark) Color.parseColor("#1A1F29") else Color.parseColor("#F8FAFC")
+            val defaultBorder = if (dark) Color.parseColor("#2E3646") else Color.parseColor("#CBD5E1")
+            val defaultTextPri = if (dark) Color.parseColor("#F2F5FA") else Color.parseColor("#0F172A")
+            val defaultTextSec = if (dark) Color.parseColor("#9AA4B2") else Color.parseColor("#475569")
+
+            val card = parseCssColor(json.optString("cardBg")) ?: defaultCard
+            val border = parseCssColor(json.optString("borderColor")) ?: defaultBorder
             val accent = parseCssColor(json.optString("accentColor")) ?: Color.parseColor("#4F8CFF")
-            val textPri = parseCssColor(json.optString("textPrimary")) ?: Color.parseColor("#F2F5FA")
-            val textSec = parseCssColor(json.optString("textSecondary")) ?: Color.parseColor("#9AA4B2")
+            val rawTextPri = parseCssColor(json.optString("textPrimary"))
+            val textPri = if (rawTextPri != null && isColorDark(rawTextPri) != dark) rawTextPri else defaultTextPri
+            val rawTextSec = parseCssColor(json.optString("textSecondary"))
+            val textSec = if (rawTextSec != null && isColorDark(rawTextSec) != dark) rawTextSec else defaultTextSec
             val borderW = json.optDouble("borderWidthDp", 1.0).toFloat().coerceIn(0.5f, 3f)
             val radius = json.optDouble("cornerRadiusDp", 18.0).toFloat().coerceIn(8f, 28f)
             val shadow = json.optDouble("shadowDp", 12.0).toFloat().coerceIn(4f, 24f)
-            val dark = json.optBoolean("isDark", isColorDark(surface))
             return HubThemeSnapshot(
                 surfaceBg = surface,
                 cardBg = card,
@@ -169,6 +291,21 @@ data class HubThemeSnapshot(
                 textSecondary = textSec,
                 isDark = dark
             )
+        }
+
+        private fun blendColors(base: Int, tint: Int, tintRatio: Float): Int {
+            val t = tintRatio.coerceIn(0f, 1f)
+            val inv = 1f - t
+            val r = (Color.red(base) * inv + Color.red(tint) * t).roundToInt().coerceIn(0, 255)
+            val g = (Color.green(base) * inv + Color.green(tint) * t).roundToInt().coerceIn(0, 255)
+            val b = (Color.blue(base) * inv + Color.blue(tint) * t).roundToInt().coerceIn(0, 255)
+            return Color.rgb(r, g, b)
+        }
+
+        private fun colorDistance(a: Int, b: Int): Int {
+            return kotlin.math.abs(Color.red(a) - Color.red(b)) +
+                kotlin.math.abs(Color.green(a) - Color.green(b)) +
+                kotlin.math.abs(Color.blue(a) - Color.blue(b))
         }
 
         private fun withAlpha(color: Int, alphaFrac: Float): Int {

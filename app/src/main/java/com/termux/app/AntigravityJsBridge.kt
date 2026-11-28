@@ -78,6 +78,10 @@ object AntigravityJsBridge {
                         window.AntigravityAndroid.onRegionBlocked(String(payload.reason || 'region_blocked'), Boolean(payload.isIpBlock));
                     } else if (action === 'theme_snapshot' && typeof window.AntigravityAndroid.onThemeSnapshot === 'function') {
                         window.AntigravityAndroid.onThemeSnapshot(JSON.stringify(payload || {}));
+                    } else if (action === 'open_controls' && typeof window.AntigravityAndroid.openControls === 'function') {
+                        window.AntigravityAndroid.openControls();
+                    } else if (action === 'header_controls_state' && typeof window.AntigravityAndroid.onHeaderControlsState === 'function') {
+                        window.AntigravityAndroid.onHeaderControlsState(Boolean(payload.mounted));
                     }
                 } catch (e) {}
             }
@@ -189,6 +193,10 @@ object AntigravityJsBridge {
             function classifyRegionBlock(txt) {
                 if (!txt) return null;
                 var lower = String(txt).toLowerCase();
+                if (lower.indexOf('18 years old or older') !== -1 ||
+                    lower.indexOf('verified your age') !== -1) {
+                    return null;
+                }
                 if (lower.indexOf('user location is not supported') !== -1) {
                     return { isIpBlock: true, reason: 'User location is not supported' };
                 }
@@ -287,18 +295,18 @@ object AntigravityJsBridge {
                     var bodyCs = getComputedStyle(document.body);
                     var rootCs = getComputedStyle(document.documentElement);
                     var surfaceBg = isOpaqueColor(bodyCs.backgroundColor) ? bodyCs.backgroundColor : rootCs.backgroundColor;
-                    var cardEl = document.querySelector('[class*="card"], [class*="panel"], header, nav, aside, button');
+                    var cardEl = document.querySelector('[class*="bg-card"], [class*="bg-popover"], [class*="card"], [class*="panel"], header, nav, aside, button');
                     var cardCs = cardEl ? getComputedStyle(cardEl) : bodyCs;
                     var cardBg = isOpaqueColor(cardCs.backgroundColor) ? cardCs.backgroundColor : surfaceBg;
                     var borderColor = isOpaqueColor(cardCs.borderColor) ? cardCs.borderColor : (isOpaqueColor(cardCs.borderTopColor) ? cardCs.borderTopColor : '');
                     var borderW = parseFloat(cardCs.borderTopWidth || cardCs.borderWidth || '1') || 1;
                     var radius = parseFloat(cardCs.borderRadius || '18') || 18;
                     var hasShadow = (cardCs.boxShadow && cardCs.boxShadow !== 'none');
-                    var btnEl = document.querySelector('button[class*="primary"], a[class*="primary"], button');
+                    var btnEl = document.querySelector('button[class*="bg-primary"], [class*="bg-primary"], button[class*="primary"], a[class*="primary"]');
                     var btnCs = btnEl ? getComputedStyle(btnEl) : cardCs;
                     var accentColor = isOpaqueColor(btnCs.backgroundColor) ? btnCs.backgroundColor : '';
                     var textPrimary = bodyCs.color || '';
-                    var mutedEl = document.querySelector('[class*="muted"], [class*="secondary"], small');
+                    var mutedEl = document.querySelector('[class*="text-muted"], [class*="muted"], [class*="secondary"], small');
                     var textSecondary = mutedEl ? getComputedStyle(mutedEl).color : textPrimary;
                     sendNative('theme_snapshot', {
                         surfaceBg: surfaceBg || '',
@@ -323,6 +331,426 @@ object AntigravityJsBridge {
                     attributeFilter: ['class', 'style', 'data-theme', 'data-color-mode']
                 });
             } catch (e) {}
+
+            // 1:1 Theme-matched Control Center button burned into Hub top header bar
+            function isFaUi() {
+                return !!(window.__agyBidiCfg && window.__agyBidiCfg.enablePersianUi);
+            }
+            var lastHeaderMounted = null;
+            var headerMountedAtLeastOnce = false;
+            var headerBootStartedAt = Date.now();
+            function reportHeaderMounted(mounted) {
+                if (mounted) headerMountedAtLeastOnce = true;
+                if (!mounted && !headerMountedAtLeastOnce && (Date.now() - headerBootStartedAt) < 1800) {
+                    return;
+                }
+                if (lastHeaderMounted === mounted) return;
+                lastHeaderMounted = mounted;
+                sendNative('header_controls_state', { mounted: mounted });
+            }
+            function findHeaderSettingsBtn() {
+                var btn = document.querySelector('button[data-testid="mobile-open-settings"]');
+                if (btn && btn.offsetParent !== null) return btn;
+                var candidates = document.querySelectorAll('header button, [data-testid="mobile-search-conversations"] ~ button, button[aria-label="Settings"], button[aria-label="تنظیمات"]');
+                for (var i = 0; i < candidates.length; i++) {
+                    var c = candidates[i];
+                    if (c.id === 'agy-header-controls-btn' || c.offsetParent === null) continue;
+                    var r = c.getBoundingClientRect();
+                    if (r.top >= 0 && r.top <= 120 && r.width > 0 && r.height > 0) {
+                        var lbl = (c.getAttribute('aria-label') || c.getAttribute('title') || '').trim().toLowerCase();
+                        if (lbl === 'settings' || lbl === 'تنظیمات' || c.getAttribute('data-testid') === 'mobile-open-settings') {
+                            return c;
+                        }
+                    }
+                }
+                return null;
+            }
+            function ensureHeaderControlsButton() {
+                try {
+                    var settingsBtn = findHeaderSettingsBtn();
+                    var existing = document.getElementById('agy-header-controls-btn');
+                    if (!settingsBtn || !settingsBtn.parentNode) {
+                        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+                        reportHeaderMounted(false);
+                        return;
+                    }
+                    var fa = isFaUi();
+                    var aria = fa ? 'مرکز کنترل' : 'Control Center';
+                    var title = fa ? 'مرکز کنترل آنتی‌گرویتی' : 'Antigravity Control Center';
+                    if (!existing) {
+                        var btn = document.createElement('button');
+                        btn.id = 'agy-header-controls-btn';
+                        btn.type = 'button';
+                        btn.setAttribute('data-testid', 'agy-header-controls');
+                        btn.setAttribute('aria-label', aria);
+                        btn.setAttribute('title', title);
+                        btn.className = settingsBtn.className || '';
+                        btn.style.webkitAppRegion = 'no-drag';
+                        var refSvg = settingsBtn.querySelector('svg');
+                        var svgW = (refSvg && refSvg.getAttribute('width')) || '20';
+                        var svgH = (refSvg && refSvg.getAttribute('height')) || '20';
+                        var svgCls = (refSvg && refSvg.getAttribute('class')) || '';
+                        btn.innerHTML =
+                            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="' + svgW + '" height="' + svgH + '" fill="currentColor" aria-hidden="true" class="' + svgCls + '">' +
+                            '<path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/>' +
+                            '</svg>';
+                        btn.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            sendNative('open_controls', {});
+                        });
+                        settingsBtn.parentNode.insertBefore(btn, settingsBtn.nextSibling);
+                    } else {
+                        if (existing.className !== (settingsBtn.className || '')) {
+                            existing.className = settingsBtn.className || '';
+                        }
+                        if (existing.previousSibling !== settingsBtn) {
+                            settingsBtn.parentNode.insertBefore(existing, settingsBtn.nextSibling);
+                        }
+                        existing.setAttribute('aria-label', aria);
+                        existing.setAttribute('title', title);
+                    }
+                    reportHeaderMounted(true);
+                } catch (e) {}
+            }
+
+            // Inline Microphone Level Meter & Record/Playback Tester inside Settings -> Voice Mode
+            var micState = window.__agyMicTester || (window.__agyMicTester = {
+                stream: null,
+                audioCtx: null,
+                analyser: null,
+                rafId: 0,
+                recorder: null,
+                chunks: [],
+                recTimer: 0,
+                recAutoStop: 0,
+                recStartedAt: 0,
+                mode: 'idle', // 'idle' | 'meter' | 'recording' | 'playing'
+                audio: null,
+                blobUrl: null,
+                abortPlayback: false
+            });
+            function stopMicTracksAndAudioCtx() {
+                if (micState.rafId) {
+                    cancelAnimationFrame(micState.rafId);
+                    micState.rafId = 0;
+                }
+                if (micState.stream) {
+                    try {
+                        micState.stream.getTracks().forEach(function(t) { try { t.stop(); } catch (e) {} });
+                    } catch (e) {}
+                    micState.stream = null;
+                }
+                if (micState.audioCtx) {
+                    try { micState.audioCtx.close().catch(function(){}); } catch (e) {}
+                    micState.audioCtx = null;
+                }
+                micState.analyser = null;
+                var fill = document.getElementById('agy-mic-meter-fill');
+                if (fill) fill.style.width = '0%';
+            }
+            function stopMicPlayback() {
+                if (micState.audio) {
+                    try { micState.audio.pause(); micState.audio.src = ''; } catch (e) {}
+                    micState.audio = null;
+                }
+                if (micState.blobUrl) {
+                    try { URL.revokeObjectURL(micState.blobUrl); } catch (e) {}
+                    micState.blobUrl = null;
+                }
+            }
+            function stopAllMicActivity(abortRecPlayback) {
+                if (micState.recTimer) { clearInterval(micState.recTimer); micState.recTimer = 0; }
+                if (micState.recAutoStop) { clearTimeout(micState.recAutoStop); micState.recAutoStop = 0; }
+                if (micState.recorder && micState.recorder.state !== 'inactive') {
+                    micState.abortPlayback = !!abortRecPlayback;
+                    try { micState.recorder.stop(); } catch (e) {}
+                } else {
+                    stopMicTracksAndAudioCtx();
+                }
+                if (abortRecPlayback) {
+                    stopMicPlayback();
+                }
+                if (abortRecPlayback || micState.mode !== 'recording') {
+                    micState.mode = 'idle';
+                }
+                updateMicTesterUi();
+            }
+            function updateMicTesterUi(customStatus) {
+                var card = document.getElementById('agy-mic-tester-card');
+                if (!card) return;
+                var fa = isFaUi();
+                card.setAttribute('dir', fa ? 'rtl' : 'ltr');
+                var titleEl = document.getElementById('agy-mic-tester-title');
+                var statusEl = document.getElementById('agy-mic-tester-status');
+                var liveBtn = document.getElementById('agy-mic-live-btn');
+                var recBtn = document.getElementById('agy-mic-rec-btn');
+                if (titleEl) titleEl.textContent = fa ? 'تست میکروفون' : 'Test Mic';
+                if (liveBtn) {
+                    liveBtn.textContent = (micState.mode === 'meter')
+                        ? (fa ? 'توقف تست' : 'Stop Meter')
+                        : (fa ? 'تست سطح صدا' : 'Live Meter');
+                }
+                if (recBtn) {
+                    if (micState.mode === 'recording') {
+                        recBtn.textContent = fa ? 'توقف و پخش' : 'Stop & Play';
+                    } else if (micState.mode === 'playing') {
+                        recBtn.textContent = fa ? 'توقف پخش' : 'Stop Playback';
+                    } else {
+                        recBtn.textContent = fa ? 'ضبط و پخش' : 'Record & Play';
+                    }
+                }
+                if (statusEl) {
+                    if (customStatus) {
+                        statusEl.textContent = customStatus;
+                    } else if (micState.mode === 'meter') {
+                        statusEl.textContent = fa ? 'در حال دریافت صدا...' : 'Listening...';
+                    } else if (micState.mode === 'playing') {
+                        statusEl.textContent = fa ? 'در حال پخش صدای ضبط‌شده...' : 'Playing back...';
+                    } else if (micState.mode === 'idle') {
+                        statusEl.textContent = fa ? 'آماده' : 'Ready';
+                    }
+                }
+            }
+            function startAnalyserLoop(stream) {
+                try {
+                    var AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    if (!AudioCtx) return;
+                    var ctx = new AudioCtx();
+                    if (ctx.state === 'suspended') {
+                        ctx.resume().catch(function(){});
+                    }
+                    var src = ctx.createMediaStreamSource(stream);
+                    var analyser = ctx.createAnalyser();
+                    analyser.fftSize = 256;
+                    analyser.smoothingTimeConstant = 0.72;
+                    src.connect(analyser);
+                    micState.audioCtx = ctx;
+                    micState.analyser = analyser;
+                    var data = new Uint8Array(analyser.frequencyBinCount);
+                    function tick() {
+                        if (!micState.analyser || (micState.mode !== 'meter' && micState.mode !== 'recording')) return;
+                        analyser.getByteTimeDomainData(data);
+                        var sum = 0;
+                        for (var i = 0; i < data.length; i++) {
+                            var v = (data[i] - 128) / 128;
+                            sum += v * v;
+                        }
+                        var rms = Math.sqrt(sum / data.length);
+                        var pct = Math.min(100, Math.max(2, Math.round(rms * 320)));
+                        var fill = document.getElementById('agy-mic-meter-fill');
+                        if (fill) fill.style.width = pct + '%';
+                        micState.rafId = requestAnimationFrame(tick);
+                    }
+                    micState.rafId = requestAnimationFrame(tick);
+                } catch (e) {}
+            }
+            function handleMicError(err) {
+                stopAllMicActivity(true);
+                var fa = isFaUi();
+                var msg = (err && err.name === 'NotAllowedError')
+                    ? (fa ? 'دسترسی میکروفون رد شد' : 'Mic permission denied')
+                    : (fa ? 'خطا در دسترسی به میکروفون' : 'Microphone unavailable');
+                updateMicTesterUi(msg);
+            }
+            function startLiveMicMeter() {
+                if (micState.mode === 'meter') {
+                    stopAllMicActivity(true);
+                    return;
+                }
+                stopAllMicActivity(true);
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    handleMicError(null);
+                    return;
+                }
+                micState.mode = 'meter';
+                updateMicTesterUi();
+                navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
+                    if (micState.mode !== 'meter' || !document.getElementById('agy-mic-tester-card')) {
+                        stream.getTracks().forEach(function(t) { try { t.stop(); } catch (e) {} });
+                        return;
+                    }
+                    micState.stream = stream;
+                    startAnalyserLoop(stream);
+                    updateMicTesterUi();
+                }).catch(handleMicError);
+            }
+            function startRecordAndPlay() {
+                if (micState.mode === 'recording') {
+                    micState.abortPlayback = false;
+                    if (micState.recTimer) { clearInterval(micState.recTimer); micState.recTimer = 0; }
+                    if (micState.recAutoStop) { clearTimeout(micState.recAutoStop); micState.recAutoStop = 0; }
+                    if (micState.recorder && micState.recorder.state !== 'inactive') {
+                        try { micState.recorder.stop(); } catch (e) { stopAllMicActivity(true); }
+                    } else {
+                        stopAllMicActivity(true);
+                    }
+                    return;
+                }
+                if (micState.mode === 'playing') {
+                    stopAllMicActivity(true);
+                    return;
+                }
+                stopAllMicActivity(true);
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+                    handleMicError(null);
+                    return;
+                }
+                micState.mode = 'recording';
+                micState.abortPlayback = false;
+                micState.chunks = [];
+                var fa = isFaUi();
+                updateMicTesterUi(fa ? 'در حال ضبط (۰ / ۱۰ ثانیه)...' : 'Recording (0s / 10s)...');
+                navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
+                    if (micState.mode !== 'recording' || !document.getElementById('agy-mic-tester-card')) {
+                        stream.getTracks().forEach(function(t) { try { t.stop(); } catch (e) {} });
+                        return;
+                    }
+                    micState.stream = stream;
+                    startAnalyserLoop(stream);
+                    var opts = {};
+                    if (typeof MediaRecorder.isTypeSupported === 'function') {
+                        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) opts.mimeType = 'audio/webm;codecs=opus';
+                        else if (MediaRecorder.isTypeSupported('audio/webm')) opts.mimeType = 'audio/webm';
+                    }
+                    var rec = new MediaRecorder(stream, opts);
+                    micState.recorder = rec;
+                    micState.recStartedAt = Date.now();
+                    rec.ondataavailable = function(ev) {
+                        if (ev.data && ev.data.size > 0) micState.chunks.push(ev.data);
+                    };
+                    rec.onstop = function() {
+                        if (micState.recTimer) { clearInterval(micState.recTimer); micState.recTimer = 0; }
+                        if (micState.recAutoStop) { clearTimeout(micState.recAutoStop); micState.recAutoStop = 0; }
+                        stopMicTracksAndAudioCtx();
+                        var aborted = micState.abortPlayback;
+                        var chunks = micState.chunks;
+                        micState.chunks = [];
+                        micState.recorder = null;
+                        if (aborted || !chunks || chunks.length === 0) {
+                            micState.mode = 'idle';
+                            updateMicTesterUi();
+                            return;
+                        }
+                        var blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+                        stopMicPlayback();
+                        var url = URL.createObjectURL(blob);
+                        micState.blobUrl = url;
+                        var audio = new Audio(url);
+                        micState.audio = audio;
+                        micState.mode = 'playing';
+                        updateMicTesterUi();
+                        audio.onended = function() {
+                            stopMicPlayback();
+                            micState.mode = 'idle';
+                            updateMicTesterUi();
+                        };
+                        audio.onerror = function() {
+                            stopMicPlayback();
+                            micState.mode = 'idle';
+                            updateMicTesterUi(isFaUi() ? 'خطا در پخش صدا' : 'Playback failed');
+                        };
+                        audio.play().catch(function() {
+                            stopMicPlayback();
+                            micState.mode = 'idle';
+                            updateMicTesterUi(isFaUi() ? 'خطا در پخش صدا' : 'Playback failed');
+                        });
+                    };
+                    rec.start(200);
+                    micState.recTimer = setInterval(function() {
+                        if (micState.mode !== 'recording') return;
+                        var sec = Math.min(10, Math.floor((Date.now() - micState.recStartedAt) / 1000));
+                        updateMicTesterUi(isFaUi() ? ('در حال ضبط (' + sec + ' / ۱۰ ثانیه)...') : ('Recording (' + sec + 's / 10s)...'));
+                    }, 250);
+                    micState.recAutoStop = setTimeout(function() {
+                        if (micState.mode === 'recording' && micState.recorder && micState.recorder.state !== 'inactive') {
+                            micState.abortPlayback = false;
+                            try { micState.recorder.stop(); } catch (e) {}
+                        }
+                    }, 10000);
+                }).catch(handleMicError);
+            }
+            function ensureMicTesterCard() {
+                try {
+                    var micCtrl = document.querySelector('[data-testid="voice-settings-mic"]');
+                    var micLabel = document.getElementById('voice-microphone-label');
+                    var anchor = micCtrl || micLabel;
+                    if (!anchor || anchor.offsetParent === null) {
+                        if (micState.mode !== 'idle' || micState.stream) {
+                            stopAllMicActivity(true);
+                        }
+                        return;
+                    }
+                    var micRow = (micCtrl && micCtrl.parentElement) || (micLabel && micLabel.closest('[class*="justify-between"]'));
+                    if (!micRow || !micRow.parentNode) return;
+                    var existing = document.getElementById('agy-mic-tester-card');
+                    if (existing) {
+                        if (existing.previousSibling !== micRow) {
+                            micRow.parentNode.insertBefore(existing, micRow.nextSibling);
+                        }
+                        updateMicTesterUi();
+                        return;
+                    }
+                    var card = document.createElement('div');
+                    card.id = 'agy-mic-tester-card';
+                    card.className = 'mx-3 my-1.5 px-3 py-2.5 rounded-lg border text-sm';
+                    card.style.cssText = 'background:var(--secondary,rgba(128,128,128,0.08));border-color:var(--border,rgba(128,128,128,0.24));';
+                    card.innerHTML =
+                        '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">' +
+                            '<span id="agy-mic-tester-title" style="font-weight:600;font-size:13px;">Test Mic</span>' +
+                            '<span id="agy-mic-tester-status" style="font-size:11.5px;opacity:0.75;">Ready</span>' +
+                        '</div>' +
+                        '<div style="height:6px;width:100%;border-radius:999px;background:rgba(128,128,128,0.24);overflow:hidden;margin-bottom:9px;">' +
+                            '<div id="agy-mic-meter-fill" style="height:100%;width:0%;border-radius:999px;background:var(--primary,#3B82F6);transition:width 60ms linear;"></div>' +
+                        '</div>' +
+                        '<div style="display:flex;align-items:center;gap:8px;">' +
+                            '<button id="agy-mic-live-btn" type="button" class="px-2.5 py-1 rounded-md border text-xs font-medium bg-background hover:bg-muted transition-colors" style="border-color:var(--border,rgba(128,128,128,0.3));cursor:pointer;">Live Meter</button>' +
+                            '<button id="agy-mic-rec-btn" type="button" class="px-2.5 py-1 rounded-md border text-xs font-medium bg-background hover:bg-muted transition-colors" style="border-color:var(--border,rgba(128,128,128,0.3));cursor:pointer;">Record & Play</button>' +
+                        '</div>';
+                    micRow.parentNode.insertBefore(card, micRow.nextSibling);
+                    var liveBtn = document.getElementById('agy-mic-live-btn');
+                    var recBtn = document.getElementById('agy-mic-rec-btn');
+                    if (liveBtn) liveBtn.addEventListener('click', function(e) { e.preventDefault(); startLiveMicMeter(); });
+                    if (recBtn) recBtn.addEventListener('click', function(e) { e.preventDefault(); startRecordAndPlay(); });
+                    updateMicTesterUi();
+                } catch (e) {}
+            }
+            if (!window.__agyMicLifecycleHooked) {
+                window.__agyMicLifecycleHooked = true;
+                document.addEventListener('visibilitychange', function() {
+                    if (document.hidden) stopAllMicActivity(true);
+                });
+                window.addEventListener('pagehide', function() {
+                    stopAllMicActivity(true);
+                });
+            }
+
+            var uiInjectScheduled = false;
+            function runUiInjections() {
+                uiInjectScheduled = false;
+                ensureHeaderControlsButton();
+                ensureMicTesterCard();
+            }
+            function scheduleUiInjections() {
+                if (uiInjectScheduled) return;
+                uiInjectScheduled = true;
+                setTimeout(runUiInjections, 120);
+            }
+            var uiObs = new MutationObserver(scheduleUiInjections);
+            function attachUiObserver() {
+                if (document.body) {
+                    uiObs.observe(document.body, { childList: true, subtree: true });
+                    runUiInjections();
+                } else {
+                    setTimeout(attachUiObserver, 300);
+                }
+            }
+            attachUiObserver();
+            setTimeout(runUiInjections, 700);
+            setTimeout(runUiInjections, 1900);
+            setInterval(function() {
+                if (!document.hidden) runUiInjections();
+            }, 2000);
         })();
     """.trimIndent()
 
@@ -376,6 +804,50 @@ object AntigravityJsBridge {
                     };
                     fr.readAsDataURL(b);
                 }).catch(function(){});
+            })();
+        """.trimIndent()
+    }
+
+    fun buildPasteImageJs(fileName: String, mimeType: String, base64Data: String): String {
+        val qName = quoteJsString(fileName)
+        val qMime = quoteJsString(mimeType)
+        val qB64 = quoteJsString(base64Data)
+        return """
+            (function() {
+                try {
+                    var b64 = $qB64;
+                    var bin = atob(b64);
+                    var len = bin.length;
+                    var bytes = new Uint8Array(len);
+                    for (var i = 0; i < len; i++) {
+                        bytes[i] = bin.charCodeAt(i);
+                    }
+                    var mime = $qMime || 'image/png';
+                    var file = new File([bytes], $qName, { type: mime, lastModified: Date.now() });
+                    var dt = new DataTransfer();
+                    dt.items.add(file);
+                    var active = document.activeElement;
+                    var target = null;
+                    if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
+                        target = active;
+                    }
+                    if (!target) {
+                        target = document.querySelector('textarea[placeholder], [contenteditable="true"][role="textbox"], [contenteditable="true"], textarea');
+                    }
+                    if (!target) return;
+                    try { target.focus(); } catch (e) {}
+                    var evt = new ClipboardEvent('paste', {
+                        clipboardData: dt,
+                        bubbles: true,
+                        cancelable: true
+                    });
+                    if (!evt.clipboardData || !evt.clipboardData.files || evt.clipboardData.files.length === 0) {
+                        try {
+                            Object.defineProperty(evt, 'clipboardData', { value: dt });
+                        } catch (e) {}
+                    }
+                    target.dispatchEvent(evt);
+                } catch (e) {}
             })();
         """.trimIndent()
     }
@@ -541,6 +1013,59 @@ object AntigravityJsBridge {
                     if ((m = norm.match(/^When toggled on,\s+(.+?)\s+will use your AI credits to fulfill model requests once you're out of model quota\./i))) {
                         return 'در صورت فعال بودن، پس از پایان سهمیه مدل از اعتبار هوش مصنوعی برای پاسخگویی استفاده می‌شود. همیشه ابتدا سهمیه مدل مصرف می‌شود.';
                     }
+                    var MODEL_NAME_MAP = {
+                        'gemini 4 hydrogen': 'جمینای ۴ هیدروژن',
+                        'gemini 3.8 flash': 'جمینای ۳.۸ فلش',
+                        'gemini 4 carbon': 'جمینای ۴ کربن',
+                        'gemini 4 argon': 'جمینای ۴ آرگون',
+                        'gemini 4 neon': 'جمینای ۴ نئون',
+                        'claude sonnet 4.6': 'کلود سونت ۴.۶',
+                        'claude opus 4.6': 'کلود اوپوس ۴.۶',
+                        'gpt-oss 120b': 'جی‌پی‌تی اوپن‌سورس ۱۲۰B'
+                    };
+                    var MODEL_TAG_MAP = {
+                        'thinking': 'استدلالی',
+                        'low': 'کم',
+                        'medium': 'متوسط',
+                        'high': 'زیاد',
+                        'extra high': 'خیلی زیاد',
+                        'very high': 'خیلی زیاد',
+                        'xhigh': 'خیلی زیاد',
+                        'extra': 'بسیار زیاد',
+                        'max': 'حداکثر'
+                    };
+                    if ((m = norm.match(/^(Gemini 4 Hydrogen|Gemini 3\.8 Flash|Gemini 4 Carbon|Gemini 4 Argon|Gemini 4 Neon|Claude Sonnet 4\.6|Claude Opus 4\.6|GPT-OSS 120B)(?:\s*\((Thinking|Low|Medium|High|Extra High|Very High|XHigh|Extra|Max)\))?$/i))) {
+                        var mName = MODEL_NAME_MAP[m[1].toLowerCase()] || m[1];
+                        if (m[2]) {
+                            var mTag = MODEL_TAG_MAP[m[2].toLowerCase()] || m[2];
+                            return mName + ' (' + mTag + ')';
+                        }
+                        return mName;
+                    }
+                    if ((m = norm.match(/^Yes,\s*and always allow\s+'(.+?)'\s+in this conversation$/i))) {
+                        return 'بله، و در این گفت‌وگو همیشه به «' + m[1] + '» اجازه بده';
+                    }
+                    if ((m = norm.match(/^Yes,\s*and always allow\s+'(.+?)'$/i))) {
+                        return 'بله، و همیشه به «' + m[1] + '» اجازه بده';
+                    }
+                    if ((m = norm.match(/^Yes,\s*allow\s+'?(.+?)'?\s+in this conversation$/i))) {
+                        return 'بله، در این گفت‌وگو به «' + m[1] + '» اجازه بده';
+                    }
+                    if ((m = norm.match(/^Yes,\s*always allow\s+(.+?)$/i))) {
+                        return 'بله، همیشه به «' + m[1] + '» اجازه بده';
+                    }
+                    if ((m = norm.match(/^Yes,\s*save rule for\s+'(.+?)'\s+in this conversation$/i))) {
+                        return 'بله، ذخیره قانون برای «' + m[1] + '» در این گفت‌وگو';
+                    }
+                    if ((m = norm.match(/^Yes,\s*save rule for\s+'(.+?)'\s+globally$/i))) {
+                        return 'بله، ذخیره قانون سراسری برای «' + m[1] + '»';
+                    }
+                    if ((m = norm.match(/^Allow\s+(.+?)\?$/i))) {
+                        return 'اجازه به ' + m[1] + '؟';
+                    }
+                    if ((m = norm.match(/^Save rule to always allow\s+(.+?)\?$/i))) {
+                        return 'ذخیره قانون برای اجازه همیشگی به ' + m[1] + '؟';
+                    }
                     return null;
                 }
 
@@ -654,6 +1179,17 @@ object AntigravityJsBridge {
                     }
                 }
 
+                function isFastSkipProseNode(node) {
+                    if (!node) return true;
+                    var el = (node.nodeType === 3) ? node.parentElement : (node.nodeType === 1 ? node : null);
+                    if (!el || !el.closest) return false;
+                    if (el.closest(HARD_SKIP_SEL)) return true;
+                    if (el.closest(CHAT_PROSE_SEL)) {
+                        return !el.closest(CHROME_CONTAINER_SEL);
+                    }
+                    return false;
+                }
+
                 function isExcludedChrome(el) {
                     if (!el || el.nodeType !== 1) return true;
                     if (el.closest && el.closest(HARD_SKIP_SEL)) return true;
@@ -711,6 +1247,7 @@ object AntigravityJsBridge {
                     if (!root || root.nodeType !== 1) return;
                     var checkEl = function(el) {
                         if (!el || el.nodeType !== 1) return;
+                        if (isFastSkipProseNode(el)) return;
                         if (el.tagName === 'KBD' || (el.className && typeof el.className === 'string' && /shortcut|keybind|accelerator/i.test(el.className))) {
                             if (el.childElementCount === 0 || el.tagName === 'KBD') {
                                 markChromeDir(el, 'ltr', 'data-agy-kbd');
@@ -731,6 +1268,47 @@ object AntigravityJsBridge {
                     }
                 }
 
+                function lookupInlineSplitFa(raw, parent) {
+                    var full = (parent && parent.textContent) ? parent.textContent.replace(/\s+/g, ' ').trim() : '';
+                    if (raw === "Yes, and always allow '") {
+                        if (/'\s+in this conversation$/i.test(full)) {
+                            return 'بله، و در این گفت‌وگو همیشه به «';
+                        }
+                        return 'بله، و همیشه به «';
+                    }
+                    if (raw === "' in this conversation") {
+                        return '» اجازه بده';
+                    }
+                    if (raw === "'" && /^Yes,\s*(?:and\s+)?always allow\s+'/i.test(full)) {
+                        return '» اجازه بده';
+                    }
+                    if (raw === "Yes, save rule for '") {
+                        if (/'\s+in this conversation$/i.test(full)) {
+                            return 'بله، ذخیره قانون برای «';
+                        }
+                        return 'بله، ذخیره قانون سراسری برای «';
+                    }
+                    if (raw === "' globally" && /^Yes,\s*save rule for\s+'/i.test(full)) {
+                        return '»';
+                    }
+                    if (raw === "Yes, allow downloads from ") {
+                        return 'بله، اجازه دانلود از ';
+                    }
+                    if (raw === "Yes, always allow downloads from ") {
+                        return 'بله، اجازه همیشگی دانلود از ';
+                    }
+                    if (raw === "Yes, allow ") {
+                        return 'بله، اجازه به ';
+                    }
+                    if (raw === "Yes, always allow ") {
+                        return 'بله، اجازه همیشگی به ';
+                    }
+                    if (raw === " in this conversation" && /^Yes,/i.test(full)) {
+                        return ' در این گفت‌وگو';
+                    }
+                    return null;
+                }
+
                 function translateSingleTextNode(node, translate) {
                     if (!node || node.nodeType !== 3) return;
                     var parent = node.parentElement;
@@ -741,6 +1319,21 @@ object AntigravityJsBridge {
                         if (parent.closest && parent.closest('[contenteditable="true"]')) return;
                         var raw = node.nodeValue;
                         if (!raw) return;
+                        var splitFa = lookupInlineSplitFa(raw, parent);
+                        if (splitFa) {
+                            var sRec = st.origText.get(node);
+                            if (!sRec || raw !== sRec.translated) {
+                                st.origText.set(node, { orig: raw, translated: splitFa });
+                            }
+                            if (node.nodeValue !== splitFa) {
+                                node.nodeValue = splitFa;
+                            }
+                            var sRtlHost = parent.closest('h1, h2, h3, h4, h5, h6, p, label, button, a, summary, [role="menuitem"], [role="option"], [role="tab"], [class*="settings-row"]') || parent;
+                            if (!sRtlHost.closest('[data-agy-kbd="1"]')) {
+                                markChromeDir(sRtlHost, 'rtl', 'data-agy-fa-rtl');
+                            }
+                            return;
+                        }
                         var norm = raw.replace(/\s+/g, ' ').trim();
                         if (!norm) return;
                         if (LTR_VALUE_RE.test(norm)) {
@@ -873,34 +1466,76 @@ object AntigravityJsBridge {
                         if (!document.getElementById(STYLE_ID)) {
                             syncStyle(cfg);
                         }
+                        var addedEls = new Set();
+                        var textNodes = cfg.enablePersianUi ? new Set() : null;
+                        var attrEls = cfg.enablePersianUi ? new Set() : null;
+
                         for (var i = 0; i < mutations.length; i++) {
                             var m = mutations[i];
                             if (m.type === 'characterData') {
-                                if (cfg.enablePersianUi) {
-                                    translateSingleTextNode(m.target, true);
+                                if (textNodes && m.target && !isFastSkipProseNode(m.target)) {
+                                    textNodes.add(m.target);
                                 }
                             } else if (m.type === 'attributes') {
-                                if (cfg.enablePersianUi && m.target && m.target.nodeType === 1) {
-                                    translateElementAttributes(m.target, true);
+                                if (attrEls && m.target && m.target.nodeType === 1 && !isFastSkipProseNode(m.target)) {
+                                    attrEls.add(m.target);
                                 }
                             } else if (m.type === 'childList' && m.addedNodes) {
                                 for (var j = 0; j < m.addedNodes.length; j++) {
                                     var node = m.addedNodes[j];
                                     if (node.nodeType === 3) {
-                                        if (cfg.enablePersianUi) {
-                                            translateSingleTextNode(node, true);
+                                        if (textNodes && !isFastSkipProseNode(node)) {
+                                            textNodes.add(node);
                                         }
                                     } else if (node.nodeType === 1) {
-                                        if (cfg.enableBidi) {
-                                            applyBidi(cfg, node);
-                                        }
-                                        if (cfg.enablePersianUi) {
-                                            applyPanelRtl(node);
-                                            translateTextNodes(node, true);
-                                            translateAttributes(node, true);
-                                            lockLtrValues(node);
-                                        }
+                                        addedEls.add(node);
                                     }
+                                }
+                            }
+                        }
+
+                        if (textNodes) {
+                            textNodes.forEach(function(tn) {
+                                if (tn.isConnected !== false) {
+                                    translateSingleTextNode(tn, true);
+                                }
+                            });
+                        }
+                        if (attrEls) {
+                            attrEls.forEach(function(ae) {
+                                if (ae.isConnected !== false) {
+                                    translateElementAttributes(ae, true);
+                                }
+                            });
+                        }
+
+                        // Deduplicate added subtrees per batch (skip elements whose ancestor is also in this batch)
+                        var dedupedRoots = [];
+                        addedEls.forEach(function(el) {
+                            if (el.isConnected === false) return;
+                            var p = el.parentElement;
+                            while (p) {
+                                if (addedEls.has(p)) return;
+                                p = p.parentElement;
+                            }
+                            dedupedRoots.push(el);
+                        });
+
+                        for (var k = 0; k < dedupedRoots.length; k++) {
+                            var rootNode = dedupedRoots[k];
+                            if (isFastSkipProseNode(rootNode)) {
+                                if (cfg.enableBidi) {
+                                    applyBidi(cfg, rootNode);
+                                }
+                            } else {
+                                if (cfg.enableBidi) {
+                                    applyBidi(cfg, rootNode);
+                                }
+                                if (cfg.enablePersianUi) {
+                                    applyPanelRtl(rootNode);
+                                    translateTextNodes(rootNode, true);
+                                    translateAttributes(rootNode, true);
+                                    lockLtrValues(rootNode);
                                 }
                             }
                         }

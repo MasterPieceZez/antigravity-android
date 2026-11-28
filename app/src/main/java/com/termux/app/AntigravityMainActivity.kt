@@ -24,6 +24,7 @@ import android.os.Message
 import android.os.PowerManager
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.util.Base64
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -48,6 +49,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
@@ -55,6 +57,9 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.ContextCompat
 import androidx.core.os.LocaleListCompat
+import androidx.core.util.component1
+import androidx.core.util.component2
+import androidx.core.view.ViewCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewAssetLoader
@@ -67,11 +72,15 @@ import com.termux.R
 import com.termux.shared.logger.Logger
 import com.termux.shared.termux.TermuxConstants.TERMUX_APP.TERMUX_SERVICE
 import com.termux.view.TerminalView
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
 import kotlin.coroutines.resume
@@ -86,6 +95,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         private const val KEY_SETUP_DISMISSED = "setup_dismissed"
         private const val STATE_TERMINAL_VISIBLE = "state_terminal_visible"
         private const val MAX_LOCAL_DOWNLOAD_BYTES = 250L * 1024L * 1024L
+        private const val MAX_PASTED_IMAGE_BYTES = 15L * 1024L * 1024L
+        private const val LAUNCH_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1000L
+        private const val INSTALL_STALL_WARN_MS = 25_000L
+        private val IMAGE_EXTENSIONS = setOf(".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic", ".heif")
     }
 
 
@@ -113,6 +126,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private lateinit var txtDetectedBackup: TextView
     private lateinit var btnOnboardingAutoInstall: TextView
     private lateinit var btnOnboardingImport: TextView
+    private lateinit var btnOnboardingCancelInstall: TextView
     private lateinit var onboardingProgressBar: ProgressBar
     private lateinit var txtOnboardingProgress: TextView
 
@@ -143,11 +157,19 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     private var addAccountJob: kotlinx.coroutines.Job? = null
+    private var installJob: Job? = null
+    private var installStallJob: Job? = null
+    @Volatile
+    private var lastInstallProgressAt = 0L
+    @Volatile
+    private var installCancelledByUser = false
     private var lastBackPressedMs = 0L
     private lateinit var pillController: FloatingPillController
     private lateinit var terminalController: EmbeddedTerminalController
     private lateinit var controlSheetController: ControlCenterSheetController
     private var isActivityForeground = true
+    private var isHeaderControlsMounted = false
+    private var hasCheckedLaunchUpdates = false
 
     private var pendingWebPermissionRequest: PermissionRequest? = null
     private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
@@ -155,6 +177,22 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private var pendingRestoreSheetStatus: TextView? = null
     private var pendingRestoreDialog: BottomSheetDialog? = null
     private var persianBidiScriptHandler: ScriptHandler? = null
+
+    private val singlePhotoPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        val callback = fileUploadCallback
+        fileUploadCallback = null
+        callback?.onReceiveValue(if (uri != null) arrayOf(uri) else null)
+    }
+
+    private val multiPhotoPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia()
+    ) { uris ->
+        val callback = fileUploadCallback
+        fileUploadCallback = null
+        callback?.onReceiveValue(if (uris.isNullOrEmpty()) null else uris.toTypedArray())
+    }
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -280,7 +318,13 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             registerReceiver(serviceStoppedReceiver, serviceStopFilter)
             registerReceiver(hubUrlUpdatedReceiver, hubUpdateFilter)
         }
+    }
 
+    private fun maybeCheckLaunchUpdatesAfterReady() {
+        if (hasCheckedLaunchUpdates) return
+        if (!hubViewModel.currentState.bootstrapComplete || !AntigravityEngine.isAgyInstalled()) return
+        if (setupContainer.visibility == View.VISIBLE || onboardingContainer.visibility == View.VISIBLE) return
+        hasCheckedLaunchUpdates = true
         checkForUpdatesAndAnnouncementsOnLaunch()
     }
 
@@ -292,42 +336,48 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             java.util.Locale.getDefault().language.equals("fa", ignoreCase = true)
 
         lifecycleScope.launch {
-            // 1. Public announcement check
-            val ann = AntigravityEngine.checkPublicAnnouncement().getOrNull()
-            if (ann != null && AntigravityEngine.isAnnouncementApplicable(ann, currentVer)) {
-                val dismissedAnnId = prefs.getString("dismissed_announcement_id", null)
-                if (ann.urgent || dismissedAnnId != ann.id) {
-                    if (!isFinishing && !isDestroyed) {
-                        val title = (if (usePersian && ann.titleFa.isNotBlank()) ann.titleFa else ann.title)
-                            .ifBlank { getString(R.string.agy_dialog_announcement_title) }
-                        val body = if (usePersian && ann.messageFa.isNotBlank()) ann.messageFa else ann.message
-                        val builder = AlertDialog.Builder(this@AntigravityMainActivity)
-                            .setTitle(title)
-                            .setMessage(body)
-                            .setNegativeButton(R.string.agy_btn_dismiss) { _, _ ->
-                                prefs.edit().putString("dismissed_announcement_id", ann.id).apply()
-                            }
-                        if (ann.url.isNotBlank()) {
-                            builder.setPositiveButton(R.string.agy_btn_open_link) { _, _ ->
-                                prefs.edit().putString("dismissed_announcement_id", ann.id).apply()
-                                runCatching {
-                                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ann.url)))
+            val now = System.currentTimeMillis()
+            // 1. Public announcement check (throttled to 6 hours with ETag caching)
+            val lastAnnCheck = prefs.getLong("last_announcement_check_ms", 0L)
+            if (now - lastAnnCheck >= LAUNCH_CHECK_INTERVAL_MS) {
+                val annRes = AntigravityEngine.checkPublicAnnouncement(this@AntigravityMainActivity)
+                prefs.edit().putLong("last_announcement_check_ms", System.currentTimeMillis()).apply()
+                val ann = annRes.getOrNull()
+                if (ann != null && AntigravityEngine.isAnnouncementApplicable(ann, currentVer)) {
+                    val dismissedAnnId = prefs.getString("dismissed_announcement_id", null)
+                    if (ann.urgent || dismissedAnnId != ann.id) {
+                        if (!isFinishing && !isDestroyed) {
+                            val title = (if (usePersian && ann.titleFa.isNotBlank()) ann.titleFa else ann.title)
+                                .ifBlank { getString(R.string.agy_dialog_announcement_title) }
+                            val body = if (usePersian && ann.messageFa.isNotBlank()) ann.messageFa else ann.message
+                            val builder = AlertDialog.Builder(this@AntigravityMainActivity)
+                                .setTitle(title)
+                                .setMessage(body)
+                                .setNegativeButton(R.string.agy_btn_dismiss) { _, _ ->
+                                    prefs.edit().putString("dismissed_announcement_id", ann.id).apply()
+                                }
+                            if (ann.url.isNotBlank()) {
+                                builder.setPositiveButton(R.string.agy_btn_open_link) { _, _ ->
+                                    prefs.edit().putString("dismissed_announcement_id", ann.id).apply()
+                                    runCatching {
+                                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ann.url)))
+                                    }
                                 }
                             }
+                            builder.show()
+                            return@launch
                         }
-                        builder.show()
-                        return@launch
                     }
                 }
             }
 
-            // 2. Automatic GitHub Releases update / hotfix check (throttled to 6 hours)
-            val now = System.currentTimeMillis()
-            val lastCheck = prefs.getLong("last_update_check_ms", 0L)
-            if (now - lastCheck < 6L * 60L * 60L * 1000L) return@launch
+            // 2. Automatic GitHub Releases update / hotfix check (throttled to 6 hours with ETag caching)
+            val lastUpdateCheck = prefs.getLong("last_update_check_ms", 0L)
+            if (System.currentTimeMillis() - lastUpdateCheck < LAUNCH_CHECK_INTERVAL_MS) return@launch
 
-            val info = AntigravityEngine.checkLatestRelease().getOrNull() ?: return@launch
+            val relRes = AntigravityEngine.checkLatestRelease(this@AntigravityMainActivity)
             prefs.edit().putLong("last_update_check_ms", System.currentTimeMillis()).apply()
+            val info = relRes.getOrNull() ?: return@launch
             if (info.tagName.isBlank() || !AntigravityEngine.isNewerVersion(info.tagName, currentTag)) return@launch
 
             val isHotfix = info.releaseName.contains("hotfix", ignoreCase = true) ||
@@ -501,34 +551,37 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 splashContainer.visibility = View.GONE
                 splashActions.visibility = View.GONE
                 webView.visibility = View.VISIBLE
+                isHeaderControlsMounted = false
                 if (!pendingTerminalRestore) {
-                    floatingPill.visibility = View.VISIBLE
-                    pillController.restorePositionIfNeeded()
+                    pillController.setVisible(true)
                 }
                 webView.loadUrl(phase.hubUrl)
+                maybeCheckLaunchUpdatesAfterReady()
                 if (pendingTerminalRestore) {
                     pendingTerminalRestore = false
                     showTerminalView()
                 }
             }
             is HubPhase.Error -> {
+                isHeaderControlsMounted = false
                 splashContainer.visibility = View.VISIBLE
                 splashActions.visibility = View.VISIBLE
                 splashStatus.text = getString(R.string.agy_splash_hub_timeout)
-                floatingPill.visibility = View.VISIBLE
-                pillController.restorePositionIfNeeded()
+                pillController.setVisible(true)
             }
             is HubPhase.Booting -> {
+                isHeaderControlsMounted = false
                 splashContainer.visibility = View.VISIBLE
                 splashStatus.text = getString(R.string.agy_splash_starting_hub)
+                pillController.setVisible(true)
             }
             is HubPhase.Initializing -> {
                 val url = state.currentHubUrl
                 if (url != null) {
+                    isHeaderControlsMounted = false
                     splashContainer.visibility = View.GONE
                     webView.visibility = View.VISIBLE
-                    floatingPill.visibility = View.VISIBLE
-                    pillController.restorePositionIfNeeded()
+                    pillController.setVisible(true)
                     webView.loadUrl(url)
                 }
             }
@@ -560,6 +613,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         txtDetectedBackup = findViewById(R.id.txt_detected_backup)
         btnOnboardingAutoInstall = findViewById(R.id.btn_onboarding_auto_install)
         btnOnboardingImport = findViewById(R.id.btn_onboarding_import)
+        btnOnboardingCancelInstall = findViewById(R.id.btn_onboarding_cancel_install)
         onboardingProgressBar = findViewById(R.id.onboarding_progress_bar)
         txtOnboardingProgress = findViewById(R.id.txt_onboarding_progress)
     }
@@ -662,6 +716,13 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                             val snapshotJson = json.toString()
                             withContext(Dispatchers.Main) { handleThemeSnapshot(snapshotJson) }
                         }
+                        "open_controls" -> withContext(Dispatchers.Main) {
+                            if (!isFinishing && !isDestroyed) controlSheetController.show()
+                        }
+                        "header_controls_state" -> {
+                            val mounted = json.optBoolean("mounted", false)
+                            withContext(Dispatchers.Main) { updateHeaderControlsMounted(mounted) }
+                        }
                     }
                 }
             }
@@ -669,6 +730,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             webView.addJavascriptInterface(LegacyAntigravityJsInterface(), "AntigravityAndroid")
         }
         registerDocumentStartPersianBidiScript()
+        registerWebViewReceiveContentListener()
 
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             val guessedName = URLUtil.guessFileName(url, contentDisposition, mimeType)
@@ -797,6 +859,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                 super.onReceivedError(view, request, error)
                 if (request?.isForMainFrame == true) {
+                    isHeaderControlsMounted = false
+                    if (!terminalController.isVisible()) pillController.setVisible(true)
                     reconnectBanner.visibility = View.VISIBLE
                     txtReconnectBanner.text = getString(R.string.agy_reconnect_banner_unavailable)
                     triggerHubReconnectIfNeeded()
@@ -806,6 +870,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
                 val didCrash = detail?.didCrash() ?: false
                 Logger.logError(LOG_TAG, "WebView render process gone. Crashed: $didCrash")
+                isHeaderControlsMounted = false
+                if (!terminalController.isVisible()) pillController.setVisible(true)
                 val crashCount = hubViewModel.recordRenderCrash(System.currentTimeMillis())
 
                 val parent = view?.parent as? ViewGroup
@@ -952,32 +1018,192 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 }
                 fileUploadCallback?.onReceiveValue(null)
                 fileUploadCallback = filePathCallback
-                val intent = try {
-                    (fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
-                        addCategory(Intent.CATEGORY_OPENABLE)
-                        type = "*/*"
-                    }).apply {
-                        if (fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
-                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-                        }
-                    }
-                } catch (_: Exception) {
-                    Intent(Intent.ACTION_GET_CONTENT).apply {
-                        addCategory(Intent.CATEGORY_OPENABLE)
-                        type = "*/*"
-                        if (fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
-                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-                        }
-                    }
+                val isMultiple = fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE
+                val acceptTypes = fileChooserParams?.acceptTypes
+                    ?.mapNotNull { it?.trim()?.lowercase(Locale.US)?.takeIf { s -> s.isNotEmpty() } }
+                    ?: emptyList()
+                val isImageOnly = acceptTypes.isNotEmpty() && acceptTypes.all {
+                    it == "image/*" || it.startsWith("image/") || it in IMAGE_EXTENSIONS
                 }
-                runCatching {
-                    fileChooserLauncher.launch(intent)
-                }.onFailure {
-                    fileUploadCallback?.onReceiveValue(null)
-                    fileUploadCallback = null
+                val acceptsAll = acceptTypes.isEmpty() || acceptTypes.any { it == "*/*" }
+
+                when {
+                    isImageOnly -> launchPhotoPicker(isMultiple)
+                    acceptsAll -> {
+                        var picked = false
+                        val options = arrayOf(
+                            getString(R.string.agy_attach_photos_gallery),
+                            getString(R.string.agy_attach_files_documents)
+                        )
+                        val dlg = AlertDialog.Builder(this@AntigravityMainActivity)
+                            .setTitle(R.string.agy_dialog_attach_title)
+                            .setItems(options) { _, which ->
+                                picked = true
+                                if (which == 0) {
+                                    launchPhotoPicker(isMultiple)
+                                } else {
+                                    launchSystemFilePicker(fileChooserParams)
+                                }
+                            }
+                            .setNegativeButton(R.string.agy_btn_cancel, null)
+                            .create()
+                        dlg.setOnDismissListener {
+                            if (!picked) {
+                                fileUploadCallback?.onReceiveValue(null)
+                                fileUploadCallback = null
+                            }
+                        }
+                        dlg.show()
+                    }
+                    else -> launchSystemFilePicker(fileChooserParams)
                 }
                 return true
             }
+        }
+    }
+
+    private fun launchPhotoPicker(isMultiple: Boolean) {
+        val req = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        runCatching {
+            if (isMultiple) {
+                multiPhotoPickerLauncher.launch(req)
+            } else {
+                singlePhotoPickerLauncher.launch(req)
+            }
+        }.onFailure {
+            fileUploadCallback?.onReceiveValue(null)
+            fileUploadCallback = null
+        }
+    }
+
+    private fun launchSystemFilePicker(fileChooserParams: WebChromeClient.FileChooserParams?) {
+        val intent = try {
+            (fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+            }).apply {
+                if (fileChooserParams?.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                }
+            }
+        } catch (_: Exception) {
+            Intent(Intent.ACTION_GET_CONTENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                if (fileChooserParams?.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                }
+            }
+        }
+        runCatching {
+            fileChooserLauncher.launch(intent)
+        }.onFailure {
+            fileUploadCallback?.onReceiveValue(null)
+            fileUploadCallback = null
+        }
+    }
+
+    private fun registerWebViewReceiveContentListener() {
+        ViewCompat.setOnReceiveContentListener(webView, arrayOf("image/*")) { _, payload ->
+            if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) {
+                return@setOnReceiveContentListener payload
+            }
+            val (imageContent, remaining) = payload.partition { item ->
+                val uri = item.uri ?: return@partition false
+                val mime = runCatching { contentResolver.getType(uri) }.getOrNull()
+                (mime != null && mime.startsWith("image/", ignoreCase = true)) ||
+                    payload.clip.description.hasMimeType("image/*")
+            }
+            val clip = imageContent?.clip
+            if (clip == null || clip.itemCount == 0) {
+                return@setOnReceiveContentListener payload
+            }
+            val uris = ArrayList<Uri>(clip.itemCount)
+            for (i in 0 until clip.itemCount) {
+                clip.getItemAt(i)?.uri?.let { uris.add(it) }
+            }
+            if (uris.isEmpty()) return@setOnReceiveContentListener payload
+
+            for (uri in uris) {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val resolvedMime = runCatching { contentResolver.getType(uri) }.getOrNull()
+                        ?.takeIf { it.startsWith("image/", ignoreCase = true) }
+                        ?: "image/png"
+                    var displayName: String? = null
+                    runCatching {
+                        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                            if (c.moveToFirst()) displayName = c.getString(0)
+                        }
+                    }
+                    val fallbackExt = when (resolvedMime.lowercase(Locale.US)) {
+                        "image/jpeg", "image/jpg" -> "jpg"
+                        "image/webp" -> "webp"
+                        "image/gif" -> "gif"
+                        else -> "png"
+                    }
+                    val safeName = AntigravityFileHelper.sanitizeFileName(
+                        displayName ?: "pasted_image_${System.currentTimeMillis()}.$fallbackExt",
+                        "pasted_image"
+                    )
+                    var tooLarge = false
+                    val bytes = runCatching {
+                        contentResolver.openInputStream(uri)?.use { input ->
+                            val out = ByteArrayOutputStream()
+                            val buf = ByteArray(32 * 1024)
+                            var total = 0L
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n <= 0) break
+                                total += n
+                                if (total > MAX_PASTED_IMAGE_BYTES) {
+                                    tooLarge = true
+                                    return@use null
+                                }
+                                out.write(buf, 0, n)
+                            }
+                            out.toByteArray()
+                        }
+                    }.getOrNull()
+                    withContext(Dispatchers.Main) {
+                        if (isFinishing || isDestroyed) return@withContext
+                        if (tooLarge) {
+                            Toast.makeText(
+                                this@AntigravityMainActivity,
+                                getString(R.string.agy_toast_pasted_image_too_large),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            return@withContext
+                        }
+                        if (bytes == null || bytes.isEmpty()) {
+                            Toast.makeText(
+                                this@AntigravityMainActivity,
+                                getString(R.string.agy_toast_pasted_image_failed),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            return@withContext
+                        }
+                        if (AntigravityFileHelper.isTrustedHubUri(webView.url)) {
+                            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                            webView.evaluateJavascript(
+                                AntigravityJsBridge.buildPasteImageJs(safeName, resolvedMime, b64),
+                                null
+                            )
+                        }
+                    }
+                }
+            }
+            remaining
+        }
+    }
+
+    private fun updateHeaderControlsMounted(mounted: Boolean) {
+        isHeaderControlsMounted = mounted
+        if (mounted) {
+            pillController.setVisible(false)
+        } else if (!terminalController.isVisible() &&
+            (webView.visibility == View.VISIBLE || splashContainer.visibility == View.VISIBLE)
+        ) {
+            pillController.setVisible(true)
         }
     }
 
@@ -1073,6 +1299,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                             if (isFinishing || isDestroyed) return@launch
                             if (newUrl != null) {
                                 hubViewModel.setCurrentHubUrl(newUrl)
+                                isHeaderControlsMounted = false
                                 splashContainer.visibility = View.GONE
                                 webView.visibility = View.VISIBLE
                                 if (!terminalController.isVisible()) {
@@ -1171,28 +1398,62 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             proceedAfterSetup()
         }
 
+        btnOnboardingCancelInstall.setOnClickListener {
+            installCancelledByUser = true
+            installStallJob?.cancel()
+            AntigravityEngine.cancelInstall()
+            installJob?.cancel()
+            txtOnboardingProgress.text = getString(R.string.agy_install_cancelled)
+            btnOnboardingCancelInstall.visibility = View.GONE
+            btnOnboardingAutoInstall.isEnabled = true
+            btnOnboardingAutoInstall.alpha = 1f
+            Toast.makeText(
+                this@AntigravityMainActivity,
+                getString(R.string.agy_toast_install_cancelled),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+
         btnOnboardingAutoInstall.setOnClickListener {
             if (AntigravityEngine.isInstallRunning()) {
                 Toast.makeText(this@AntigravityMainActivity, getString(R.string.agy_toast_install_running), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
+            installCancelledByUser = false
+            lastInstallProgressAt = System.currentTimeMillis()
             btnOnboardingAutoInstall.isEnabled = false
             btnOnboardingAutoInstall.alpha = 0.6f
             onboardingProgressBar.visibility = View.VISIBLE
             txtOnboardingProgress.visibility = View.VISIBLE
+            btnOnboardingCancelInstall.visibility = View.VISIBLE
             onboardingProgressBar.progress = 5
             txtOnboardingProgress.text = getString(R.string.agy_install_starting)
-            lifecycleScope.launch {
+
+            installStallJob?.cancel()
+            installStallJob = lifecycleScope.launch {
+                while (isActive && AntigravityEngine.isInstallRunning() && !installCancelledByUser) {
+                    delay(2000L)
+                    if (isFinishing || isDestroyed || installCancelledByUser) break
+                    if (AntigravityEngine.isInstallRunning() &&
+                        System.currentTimeMillis() - lastInstallProgressAt >= INSTALL_STALL_WARN_MS
+                    ) {
+                        txtOnboardingProgress.text = getString(R.string.agy_install_stalled_warning)
+                    }
+                }
+            }
+
+            installJob = lifecycleScope.launch {
                 try {
                     val res = AntigravityEngine.installAntigravityCli(this@AntigravityMainActivity) { pct, msg ->
+                        lastInstallProgressAt = System.currentTimeMillis()
                         runOnUiThread {
-                            if (!isFinishing && !isDestroyed) {
+                            if (!isFinishing && !isDestroyed && !installCancelledByUser) {
                                 onboardingProgressBar.progress = pct
                                 txtOnboardingProgress.text = msg
                             }
                         }
                     }
-                    if (isFinishing || isDestroyed) return@launch
+                    if (isFinishing || isDestroyed || installCancelledByUser) return@launch
                     res.onSuccess {
                         Toast.makeText(
                             this@AntigravityMainActivity,
@@ -1208,8 +1469,14 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                             Toast.LENGTH_LONG
                         ).show()
                     }
+                } catch (ce: CancellationException) {
+                    if (!installCancelledByUser) throw ce
                 } finally {
+                    installStallJob?.cancel()
+                    installStallJob = null
+                    installJob = null
                     if (!isFinishing && !isDestroyed) {
+                        btnOnboardingCancelInstall.visibility = View.GONE
                         btnOnboardingAutoInstall.isEnabled = true
                         btnOnboardingAutoInstall.alpha = 1f
                     }
@@ -1439,10 +1706,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
 
     private fun showOnboardingScreen() {
         hubViewModel.showOnboarding()
+        isHeaderControlsMounted = false
         splashContainer.visibility = View.GONE
         setupContainer.visibility = View.GONE
         webView.visibility = View.GONE
         floatingPill.visibility = View.GONE
+        btnOnboardingCancelInstall.visibility = View.GONE
         onboardingContainer.visibility = View.VISIBLE
         refreshDetectedBackupBanner()
     }
@@ -1485,23 +1754,25 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 if (isFinishing || isDestroyed) return@launch
                 resolvedHubUrl = hubUrl
                 if (hubUrl != null) {
+                    isHeaderControlsMounted = false
                     splashContainer.visibility = View.GONE
                     splashActions.visibility = View.GONE
                     webView.visibility = View.VISIBLE
                     if (!terminalController.isVisible()) {
-                        floatingPill.visibility = View.VISIBLE
-                        pillController.restorePositionIfNeeded()
+                        pillController.setVisible(true)
                     }
                     webView.loadUrl(hubUrl)
+                    maybeCheckLaunchUpdatesAfterReady()
                     if (pendingTerminalRestore) {
                         pendingTerminalRestore = false
                         showTerminalView()
                     }
                 } else {
+                    isHeaderControlsMounted = false
                     splashStatus.text = getString(R.string.agy_splash_hub_timeout)
                     splashActions.visibility = View.VISIBLE
-                    floatingPill.visibility = View.VISIBLE
-                    pillController.restorePositionIfNeeded()
+                    pillController.setVisible(true)
+                    maybeCheckLaunchUpdatesAfterReady()
                     Toast.makeText(
                         this@AntigravityMainActivity,
                         getString(R.string.agy_toast_hub_timeout),
@@ -1523,7 +1794,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private fun hideTerminalView() {
         terminalController.hide()
         if (webView.visibility == View.VISIBLE) {
-            pillController.setVisible(true)
+            pillController.setVisible(!isHeaderControlsMounted)
         } else if (AntigravityEngine.isAgyInstalled()) {
             bootAntigravityHub()
         } else {
@@ -1629,9 +1900,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             openOAuthUrlOnUi(oauthUrl, txtReconnectBanner)
         }
         if (newUrl != null) {
+            isHeaderControlsMounted = false
             splashContainer.visibility = View.GONE
             webView.visibility = View.VISIBLE
-            floatingPill.visibility = View.VISIBLE
+            if (!terminalController.isVisible()) pillController.setVisible(true)
             webView.loadUrl(newUrl)
             val msg = if (autoReason != null) {
                 getString(R.string.agy_toast_auto_switched, switched.email)
@@ -1708,9 +1980,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 if (isFinishing || isDestroyed) return@launch
                 if (newUrl != null) {
                     resolvedUrl = newUrl
+                    isHeaderControlsMounted = false
                     splashContainer.visibility = View.GONE
                     webView.visibility = View.VISIBLE
-                    floatingPill.visibility = View.VISIBLE
+                    if (!terminalController.isVisible()) pillController.setVisible(true)
                     webView.loadUrl(newUrl)
                     Toast.makeText(
                         this@AntigravityMainActivity,
@@ -2270,6 +2543,20 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             if (snapshotJson.isNullOrBlank()) return
             runIfTrustedHub {
                 handleThemeSnapshot(snapshotJson)
+            }
+        }
+
+        @JavascriptInterface
+        fun openControls() {
+            runIfTrustedHub {
+                controlSheetController.show()
+            }
+        }
+
+        @JavascriptInterface
+        fun onHeaderControlsState(mounted: Boolean) {
+            runIfTrustedHub {
+                updateHeaderControlsMounted(mounted)
             }
         }
 
