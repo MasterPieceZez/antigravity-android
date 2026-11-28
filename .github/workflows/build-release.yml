@@ -37,7 +37,7 @@ jobs:
           packages: 'platforms;android-36 build-tools;36.0.0 ndk;29.0.14206865'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Run Android Unit Tests
         run: |
@@ -70,7 +70,7 @@ jobs:
           packages: 'platforms;android-36 build-tools;36.0.0 ndk;29.0.14206865'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Cache native tools (libzstd_cli.so & libagy_patch.so)
         id: cache-native
