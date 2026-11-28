@@ -482,19 +482,34 @@ class AntigravityCoreTest {
         val persianUiOnly = AntigravityJsBridge.buildPersianBidiJs(enableBidi = false, enablePersianUi = true)
         assertTrue(persianUiOnly.contains("var enableBidi = false;"))
         assertTrue(persianUiOnly.contains("var enablePersianUi = true;"))
-        assertTrue(persianUiOnly.contains("Ask anything, @ to mention, / for actions"))
-        assertTrue(persianUiOnly.contains("Pinned Conversations"))
-        assertTrue(persianUiOnly.contains("Interface Layout"))
-        assertTrue(persianUiOnly.contains("Select Previous Conversation"))
-        assertTrue(persianUiOnly.contains("Notification Preferences"))
+        assertTrue(persianUiOnly.contains(AntigravityJsBridge.FA_DICT_ASSET_URL))
+        assertTrue(persianUiOnly.contains("replace(/\\s+/g, ' ').trim()"))
         assertTrue(persianUiOnly.contains("data-agy-fa-rtl"))
         assertTrue(persianUiOnly.contains("data-agy-kbd"))
-        assertTrue(persianUiOnly.contains("پروژه‌ها"))
-        assertTrue(persianUiOnly.contains("توقف"))
 
         val bothOff = AntigravityJsBridge.buildPersianBidiJs(enableBidi = false, enablePersianUi = false)
         assertTrue(bothOff.contains("var enableBidi = false;"))
         assertTrue(bothOff.contains("var enablePersianUi = false;"))
+    }
+
+    @Test
+    fun persianDictionaryAsset_containsCoreHubChromeEntries() {
+        val candidates = listOf(
+            java.io.File("src/main/assets/i18n/fa.json"),
+            java.io.File("app/src/main/assets/i18n/fa.json")
+        )
+        val faFile = candidates.firstOrNull { it.isFile }
+        assertNotNull("assets/i18n/fa.json must exist", faFile)
+        val json = faFile!!.readText(Charsets.UTF_8)
+        assertTrue(json.trim().startsWith("{") && json.trim().endsWith("}"))
+        assertTrue(json.contains("\"Pinned Conversations\":"))
+        assertTrue(json.contains("\"Ask anything, @ to mention, / for actions\":"))
+        assertTrue(json.contains("\"Interface Layout\":"))
+        assertTrue(json.contains("\"Global Permissions\":"))
+        assertTrue(json.contains("\"Keyboard shortcuts for quick navigation and control.\":"))
+        assertTrue(json.contains("\"Notification Preferences\":"))
+        assertTrue(json.contains("\"Browser Actuation Permissions\":"))
+        assertTrue(json.contains("\"پروژه‌ها\""))
     }
 
     @Test

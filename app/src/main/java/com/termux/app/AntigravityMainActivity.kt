@@ -648,8 +648,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 if (url.scheme == "https" && url.host == "appassets.androidplatform.net") {
                     val res = assetLoader.shouldInterceptRequest(url)
                     if (res != null) {
-                        if (url.path?.endsWith(".woff2", ignoreCase = true) == true) {
+                        val path = url.path
+                        if (path?.endsWith(".woff2", ignoreCase = true) == true) {
                             res.mimeType = "font/woff2"
+                        } else if (path?.endsWith(".json", ignoreCase = true) == true) {
+                            res.mimeType = "application/json"
                         }
                         val origin = request.requestHeaders?.entries
                             ?.firstOrNull { it.key.equals("Origin", ignoreCase = true) }

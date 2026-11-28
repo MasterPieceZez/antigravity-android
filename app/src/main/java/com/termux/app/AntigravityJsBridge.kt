@@ -19,6 +19,7 @@ object AntigravityJsBridge {
     const val DEFAULT_BIDI_RTL_ENABLED = true
     const val DEFAULT_PERSIAN_UI_ENABLED = false
     const val VAZIRMATN_ASSET_URL = "https://appassets.androidplatform.net/assets/fonts/Vazirmatn-NL.woff2"
+    const val FA_DICT_ASSET_URL = "https://appassets.androidplatform.net/assets/i18n/fa.json"
 
     fun isBidiRtlEnabled(prefs: SharedPreferences): Boolean =
         prefs.getBoolean(KEY_BIDI_RTL_ENABLED, DEFAULT_BIDI_RTL_ENABLED)
@@ -373,6 +374,7 @@ object AntigravityJsBridge {
      */
     fun buildPersianBidiJs(enableBidi: Boolean, enablePersianUi: Boolean): String {
         val qFontUrl = quoteJsString(VAZIRMATN_ASSET_URL)
+        val qDictUrl = quoteJsString(FA_DICT_ASSET_URL)
         return """
             (function() {
                 var enableBidi = $enableBidi;
@@ -384,6 +386,8 @@ object AntigravityJsBridge {
                     origAttr: new WeakMap(),
                     origDir: new WeakMap(),
                     origChromeDir: new WeakMap(),
+                    faDict: null,
+                    faDictLoading: false,
                     observerInstalled: false,
                     observer: null,
                     timer: null,
@@ -393,207 +397,78 @@ object AntigravityJsBridge {
                 var STYLE_ID = 'agy-bidi-style';
                 var BIDI_TARGET_SEL = 'p, li, h1, h2, h3, h4, h5, h6, blockquote, textarea, [contenteditable="true"], [class*="prose"], [class*="markdown"], [data-testid*="message"], [class*="message-content"], [class*="message-body"], [class*="chat-message"]';
                 var CODE_LOCK_SEL = 'pre, code, kbd, samp, .monaco-editor, .xterm, [class*="diff-"], [class*="-diff"], [class*="diffEditor"], [class*="DiffEditor"], [class*="bg-diffEditor"], [class*="terminal-"], [class*="-terminal"], .terminal, [data-testid*="terminal"], [data-testid*="diff"]';
-                var CHROME_SKIP_SEL = 'pre, code, kbd, samp, script, style, noscript, svg, .monaco-editor, .xterm, [class*="prose"], [class*="markdown"], [class*="message-content"], [class*="message-body"], [data-testid*="message-content"], [class*="diff-"], [class*="-diff"], [class*="diffEditor"], [class*="DiffEditor"], [class*="bg-diffEditor"], [class*="terminal-"], [class*="-terminal"], .terminal, [data-testid*="terminal"], [data-testid*="diff"]';
+                var HARD_SKIP_SEL = 'pre, code, kbd, samp, script, style, noscript, svg, .monaco-editor, .xterm, [class*="diff-"], [class*="-diff"], [class*="diffEditor"], [class*="DiffEditor"], [class*="bg-diffEditor"], [class*="terminal-"], [class*="-terminal"], .terminal, [data-testid*="terminal"], [data-testid*="diff"]';
+                var CHAT_PROSE_SEL = '[data-testid="live-user-turn"], [data-testid="live-agent-turn"], [data-testid*="message-content"], [class*="message-content"], [class*="message-body"], .prose, [class*="prose "], [class*=" prose"], [class*="markdown"]';
+                var CHROME_CONTAINER_SEL = '[role="dialog"], [role="menu"], nav, aside, header, [class*="settings"], [data-testid*="settings"], [class*="sidebar"], [class*="toolbar"]';
                 var KBD_BADGE_RE = /^(?:Ctrl|Cmd|Alt|Shift|Meta|CmdOrCtrl|Opt|⌘|⌥|⌃|⇧)(?:\s*\+\s*[^\s]+)+$/i;
 
-                var FA_DICT = {
-                    // Sidebar & Home
-                    'Projects': 'پروژه‌ها',
-                    'Customizations': 'سفارشی‌سازی‌ها',
-                    'Pinned Conversations': 'گفت‌وگوهای سنجاق‌شده',
-                    'Pinned': 'سنجاق‌شده',
-                    'Untitled Conversation': 'گفت‌وگوی بدون عنوان',
-                    'See all': 'مشاهده همه',
-                    'See less': 'نمایش کمتر',
-                    'Show Less': 'نمایش کمتر',
-                    'New Conversation': 'گفت‌وگوی جدید',
-                    'New conversation': 'گفت‌وگوی جدید',
-                    'Recent Conversations': 'گفت‌وگوهای اخیر',
-                    'Conversations': 'گفت‌وگوها',
-                    'Search...': 'جستجو...',
-                    'Search': 'جستجو',
-                    'Commands': 'دستورات',
-                    'Code Search': 'جستجوی کد',
-                    'Automations': 'خودکارسازی‌ها',
-                    'Inbox': 'صندوق ورودی',
-                    'Archive This Conversation': 'بایگانی این گفت‌وگو',
-                    'Pin This Conversation': 'سنجاق کردن این گفت‌وگو',
-                    'Unpin This Conversation': 'برداشتن سنجاق این گفت‌وگو',
-                    'Only Archived': 'فقط بایگانی‌شده‌ها',
-                    'Only Automations': 'فقط خودکارسازی‌ها',
-                    'Sort and filter conversations': 'مرتب‌سازی و فیلتر گفت‌وگوها',
+                function ensureFaDictLoaded() {
+                    if (st.faDict || st.faDictLoading) return;
+                    st.faDictLoading = true;
+                    fetch($qDictUrl, { cache: 'force-cache' })
+                        .then(function(r) { return r.ok ? r.json() : null; })
+                        .then(function(dict) {
+                            st.faDictLoading = false;
+                            if (dict && typeof dict === 'object') {
+                                st.faDict = dict;
+                                if (window.__agyBidiCfg && window.__agyBidiCfg.enablePersianUi) {
+                                    applyAll();
+                                }
+                            }
+                        })
+                        .catch(function() {
+                            st.faDictLoading = false;
+                        });
+                }
 
-                    // Composer & Actions
-                    'Ask anything, @ to mention, / for actions': 'هر چیزی بپرسید، @ برای اشاره، / برای دستورات',
-                    'Ask anything, @ to mention': 'هر چیزی بپرسید، @ برای اشاره',
-                    'Ask anything': 'هر چیزی بپرسید',
-                    'Input Box': 'کادر ورودی',
-                    'Queued messages': 'پیام‌های در صف',
-                    'Configure when follow-up messages are sent.': 'تنظیم زمان ارسال پیام‌های پیگیری.',
-                    'Queue': 'در صف',
-                    'Send Immediately': 'ارسال فوری',
-                    'Interrupt the agent and send immediately.': 'توقف ایجنت و ارسال فوری پیام.',
-                    'Queue until after the current turn.': 'در صف ماندن تا پایان نوبت فعلی.',
-                    'Enter to send': 'ارسال با Enter',
-                    'Send messages with the keyboard\'s Enter key instead of starting a new line.': 'ارسال پیام با کلید Enter به‌جای رفتن به خط جدید.',
-                    'Send message': 'ارسال پیام',
-                    'Choose which key sends a message in the chat composer.': 'انتخاب کلید ارسال پیام در کادر گفتگو.',
-                    'Always proceed': 'همیشه ادامه بده',
-                    'Always Proceed': 'همیشه ادامه بده',
-                    'Open': 'باز کردن',
-                    'Stop': 'توقف',
-                    'Copy': 'کپی',
-                    'Retry': 'تلاش مجدد',
-                    'Accept': 'پذیرش',
-                    'Accept all': 'پذیرش همه',
-                    'Approve': 'تایید',
-                    'Allow': 'اجازه دادن',
-                    'Cancel': 'لغو',
-                    'Close': 'بستن',
-                    'Delete': 'حذف',
-                    'Save': 'ذخیره',
-                    'Dismiss': 'بستن',
-                    'Back': 'بازگشت',
-
-                    // Settings Navigation & Footer
-                    'Settings': 'تنظیمات',
-                    'General': 'عمومی',
-                    'Shortcuts': 'میانبرها',
-                    'Notifications': 'اعلان‌ها',
-                    'Models': 'مدل‌ها',
-                    'Browser': 'مرورگر',
-                    'Account': 'حساب کاربری',
-                    'Appearance': 'ظاهر',
-                    'Labs': 'آزمایشگاه',
-                    'App': 'برنامه',
-                    'Give Feedback': 'ارسال بازخورد',
-                    'Provide Feedback': 'ارسال بازخورد',
-
-                    // General Settings
-                    'Configure agent execution, queued message delivery, and permissions.': 'تنظیم نحوه اجرای ایجنت، ارسال پیام‌های در صف و مجوزها.',
-                    'Interface Layout': 'چیدمان رابط کاربری',
-                    'Knowledge Work': 'کارهای دانشی',
-                    'Simplified interface for research, writing, and everyday tasks.': 'رابط کاربری ساده‌شده برای پژوهش، نویسندگی و کارهای روزمره.',
-                    'Software Engineering': 'مهندسی نرم‌افزار',
-                    'Full interface for coding, developer tools, and managing agents.': 'رابط کاربری کامل برای کدنویسی، ابزارهای توسعه و مدیریت ایجنت‌ها.',
-                    'Project 4K': 'حالت ساده',
-                    'Project 4K interface without developer tooling.': 'رابط کاربری ساده‌شده بدون ابزارهای توسعه‌دهندگان.',
-                    'The full developer experience.': 'تجربه کامل توسعه‌دهندگان.',
-                    'Global Permissions': 'مجوزهای سراسری',
-                    'Permissions': 'مجوزها',
-                    'Permission Details': 'جزئیات مجوزها',
-                    'Configure global allowed and denied resource permissions.': 'پیکربندی سراسری منابع مجاز و مسدودشده.',
-                    'Configure what the agent can do in local and remote conversations.': 'تعیین دسترسی‌های ایجنت در گفت‌وگوهای محلی و از راه‌دور.',
-                    'Learn more.': 'بیشتر بدانید.',
-                    'Learn more': 'بیشتر بدانید',
-                    'Permission preset': 'الگوی مجوزها',
-                    'Controls the actions the agent can take. Default needs the terminal sandbox, which isn\'t available on this host.': 'اقدامات مجاز ایجنت را کنترل می‌کند. حالت پیش‌فرض نیازمند سندباکس ترمینال است که در این میزبان در دسترس نیست.',
-                    'Modify permissions for file, terminal, and MCP tools.': 'ویرایش مجوزهای دسترسی به فایل، ترمینال و ابزارهای MCP.',
-                    'Configure allowed and denied URLs for reading.': 'پیکربندی نشانی‌های اینترنتی مجاز و مسدودشده برای خواندن.',
-                    'Tool permissions': 'مجوزهای ابزار',
-                    'Network access rules': 'قوانین دسترسی شبکه',
-                    'Allowed Domains': 'دامنه‌های مجاز',
-                    'Execute URLs': 'اجرای نشانی‌ها',
-                    'Download files': 'دانلود فایل‌ها',
-                    'Default': 'پیش‌فرض',
-                    'Turbo': 'توربو',
-                    'Ask Every Time': 'هر بار بپرس',
-                    'Request Review': 'درخواست بررسی',
-                    'Run all commands without restrictions.': 'اجرای همه دستورات بدون محدودیت.',
-                    'Terminal sandbox is not supported in this environment': 'سندباکس ترمینال در این محیط پشتیبانی نمی‌شود',
-                    'New Workspace': 'فضای کاری جدید',
-                    'No Project': 'بدون پروژه',
-                    'Last Workspace': 'آخرین فضای کاری',
-                    'Create a new workspace from your first message.': 'ساخت فضای کاری جدید با اولین پیام شما.',
-                    'Start without a workspace, for general questions.': 'شروع بدون فضای کاری برای پرسش‌های عمومی.',
-                    'Reuse your last workspace.': 'استفاده مجدد از آخرین فضای کاری.',
-
-                    // Shortcuts
-                    'Keyboard shortcuts for quick navigation and control.': 'میانبرهای صفحه‌کلید برای جابه‌جایی و کنترل سریع.',
-                    'Search shortcuts...': 'جستجوی میانبرها...',
-                    'Clear search': 'پاک کردن جستجو',
-                    'Reset All to Defaults': 'بازنشانی همه به پیش‌فرض',
-                    'Reset all shortcuts to defaults': 'بازنشانی تمام میانبرها به حالت پیش‌فرض',
-                    'No keyboard shortcuts found matching your filter.': 'هیچ میانبری مطابق فیلتر شما یافت نشد.',
-                    'Navigation': 'ناوبری',
-                    'Open Conversation Picker': 'باز کردن انتخابگر گفت‌وگو',
-                    'Open File Search': 'باز کردن جستجوی فایل',
-                    'Open Command Palette': 'باز کردن فهرست دستورات',
-                    'Close Tab': 'بستن زبانه',
-                    'New Tab': 'زبانه جدید',
-                    'Reopen Closed Tab': 'باز کردن مجدد زبانه بسته‌شده',
-                    'Select Previous Conversation': 'انتخاب گفت‌وگوی قبلی',
-                    'Select Next Conversation': 'انتخاب گفت‌وگوی بعدی',
-                    'Move Conversation Up': 'انتقال گفت‌وگو به بالا',
-                    'Move Conversation Down': 'انتقال گفت‌وگو به پایین',
-                    'Open Keyboard Shortcuts': 'باز کردن میانبرهای صفحه‌کلید',
-                    'Toggle Sidebar': 'نمایش/مخفی کردن نوار کناری',
-                    'Go Back': 'بازگشت به عقب',
-                    'Go Forward': 'رفتن به جلو',
-                    'Find in Conversation': 'جستجو در گفت‌وگو',
-                    'Copy Conversation Markdown': 'کپی متن Markdown گفت‌وگو',
-                    'Terminal: Add to Chat': 'ترمینال: افزودن به گفتگو',
-
-                    // Notifications, Models, Browser, Customizations, Appearance
-                    'Notification Preferences': 'تنظیمات اعلان‌ها',
-                    'Allow Gemini to notify you when the agent needs your attention or completes a task.': 'به جمنای اجازه دهید هنگام نیاز به توجه شما یا پایان یک کار اعلان بفرستد.',
-                    'Choose whether to be notified when the agent needs your attention or completes a task.': 'انتخاب کنید هنگام نیاز به توجه شما یا تکمیل کار اعلان ارسال شود یا خیر.',
-                    'Open Preferences': 'باز کردن تنظیمات',
-                    'Sound': 'صدا',
-                    'Volume': 'بلندی صدا',
-                    'Model': 'مدل',
-                    'Model Credits': 'اعتبار مدل‌ها',
-                    'Model quota reached': 'سهمیه مدل به پایان رسید',
-                    'Baseline model quota reached': 'سهمیه پایه مدل به پایان رسید',
-                    'Select another model': 'انتخاب مدل دیگر',
-                    'Enable Overages': 'فعال‌سازی مصرف مازاد',
-                    'See Plans': 'مشاهده طرح‌ها',
-                    'Built-in Browser': 'مرورگر داخلی',
-                    'External Browser': 'مرورگر خارجی',
-                    'Browser Subagent': 'زیرایجنت مرورگر',
-                    'Browser Subagent Viewer': 'نمایشگر زیرایجنت مرورگر',
-                    'Browser Actuation Permissions': 'مجوزهای عملکرد مرورگر',
-                    'Allow/deny agent browser actuation access to specific URLs.': 'تایید یا مسدودسازی دسترسی مرورگر ایجنت به نشانی‌های مشخص.',
-                    'Allow/deny agent browser file downloads from specific sites.': 'تایید یا مسدودسازی دانلود فایل توسط مرورگر ایجنت از سایت‌های مشخص.',
-                    'Search sites...': 'جستجوی سایت‌ها...',
-                    'Browser Task': 'وظیفه مرورگر',
-                    'Browser tools are disabled in the Antigravity Android desktop app.': 'ابزارهای مرورگر در نسخه اندروید آنتی‌گرویتی غیرفعال هستند.',
-                    'Default Customizations': 'سفارشی‌سازی‌های پیش‌فرض',
-                    'Customize Global Skills': 'سفارشی‌سازی مهارت‌های سراسری',
-                    'Custom Agents': 'ایجنت‌های سفارشی',
-                    'MCP Servers': 'سرورهای MCP',
-                    'Theme': 'پوسته',
-                    'Dark': 'تیره',
-                    'Light': 'روشن',
-                    'System': 'سیستم',
-                    'Sign out': 'خروج از حساب',
-                    'Artifacts': 'آثار و خروجی‌ها',
-                    'Changes': 'تغییرات',
-                    'Review': 'بررسی',
-                    'Recent': 'اخیر',
-                    'Files': 'فایل‌ها',
-                    'Keep Computer Awake': 'بیدار نگه داشتن دستگاه',
-                    'Run in Background': 'اجرا در پس‌زمینه',
-                    'Auto Check for Updates': 'بررسی خودکار به‌روزرسانی'
-                };
-
-                function lookupPersian(trimmed) {
-                    if (!trimmed) return null;
-                    if (Object.prototype.hasOwnProperty.call(FA_DICT, trimmed)) {
-                        return FA_DICT[trimmed];
+                function lookupPersian(norm) {
+                    if (!norm) return null;
+                    var dict = st.faDict;
+                    if (dict && Object.prototype.hasOwnProperty.call(dict, norm)) {
+                        return dict[norm];
                     }
                     var m;
-                    if ((m = trimmed.match(/^See all\s*\((\d+)\)$/i))) {
+                    if ((m = norm.match(/^See all\s*\((\d+)\)$/i))) {
                         return 'مشاهده همه (' + m[1] + ')';
                     }
-                    if ((m = trimmed.match(/^Show all\s*\((\d+)\)$/i))) {
+                    if ((m = norm.match(/^Show all\s*\((\d+)\)$/i))) {
                         return 'نمایش همه (' + m[1] + ')';
                     }
-                    if ((m = trimmed.match(/^Select Sidebar Item\s+(\d+)$/i))) {
+                    if ((m = norm.match(/^Show more\s*\((\d+)\)$/i))) {
+                        return 'نمایش بیشتر (' + m[1] + ')';
+                    }
+                    if ((m = norm.match(/^Show submitted\s*\((\d+)\)$/i))) {
+                        return 'نمایش ارسال‌شده‌ها (' + m[1] + ')';
+                    }
+                    if ((m = norm.match(/^Select Sidebar Item\s+(\d+)$/i))) {
                         return 'انتخاب مورد ' + m[1] + ' نوار کناری';
                     }
-                    if ((m = trimmed.match(/^(\d+)\s+conversations?$/i))) {
+                    if ((m = norm.match(/^(\d+)\s+conversations?$/i))) {
                         return m[1] + ' گفت‌وگو';
+                    }
+                    if ((m = norm.match(/^(\d+)\s+pinned$/i))) {
+                        return m[1] + ' سنجاق‌شده';
+                    }
+                    if ((m = norm.match(/^(\d+)\s+files?$/i))) {
+                        return m[1] + ' فایل';
+                    }
+                    if ((m = norm.match(/^(\d+)\s+changes?$/i))) {
+                        return m[1] + ' تغییر';
+                    }
+                    if ((m = norm.match(/^(\d+)\s*(?:s|sec|seconds?)\s+ago$/i))) {
+                        return m[1] + ' ثانیه پیش';
+                    }
+                    if ((m = norm.match(/^(\d+)\s*(?:m|min|minutes?)\s+ago$/i))) {
+                        return m[1] + ' دقیقه پیش';
+                    }
+                    if ((m = norm.match(/^(\d+)\s*(?:h|hr|hours?)\s+ago$/i))) {
+                        return m[1] + ' ساعت پیش';
+                    }
+                    if ((m = norm.match(/^(\d+)\s*(?:d|days?)\s+ago$/i))) {
+                        return m[1] + ' روز پیش';
+                    }
+                    if ((m = norm.match(/^(\d+)\s*(?:w|wk|weeks?)\s+ago$/i))) {
+                        return m[1] + ' هفته پیش';
                     }
                     return null;
                 }
@@ -703,7 +578,11 @@ object AntigravityJsBridge {
 
                 function isExcludedChrome(el) {
                     if (!el || el.nodeType !== 1) return true;
-                    return !!(el.closest && el.closest(CHROME_SKIP_SEL));
+                    if (el.closest && el.closest(HARD_SKIP_SEL)) return true;
+                    if (el.closest && el.closest(CHAT_PROSE_SEL)) {
+                        return !(el.closest(CHROME_CONTAINER_SEL));
+                    }
+                    return false;
                 }
 
                 function markChromeDir(el, dirVal, markerAttr) {
@@ -770,17 +649,18 @@ object AntigravityJsBridge {
                             if (parent.closest && parent.closest('[contenteditable="true"]')) continue;
                             var raw = node.nodeValue;
                             if (!raw) continue;
-                            var trimmed = raw.trim();
-                            if (!trimmed) continue;
-                            if (KBD_BADGE_RE.test(trimmed)) {
+                            var norm = raw.replace(/\s+/g, ' ').trim();
+                            if (!norm) continue;
+                            if (KBD_BADGE_RE.test(norm)) {
                                 markChromeDir(parent, 'ltr', 'data-agy-kbd');
                                 continue;
                             }
-                            var fa = lookupPersian(trimmed);
+                            var fa = lookupPersian(norm);
                             if (!fa) continue;
-                            var startIdx = raw.indexOf(trimmed);
-                            var lead = raw.slice(0, startIdx);
-                            var trail = raw.slice(startIdx + trimmed.length);
+                            var leadMatch = raw.match(/^\s*/);
+                            var trailMatch = raw.match(/\s*$/);
+                            var lead = leadMatch ? leadMatch[0] : '';
+                            var trail = (trailMatch && lead.length < raw.length) ? trailMatch[0] : '';
                             var nextVal = lead + fa + trail;
                             var rec = st.origText.get(node);
                             if (!rec || raw !== rec.translated) {
@@ -817,8 +697,8 @@ object AntigravityJsBridge {
                                 var attr = attrs[a];
                                 var val = el.getAttribute(attr);
                                 if (!val) continue;
-                                var trimmed = val.trim();
-                                var fa = lookupPersian(trimmed);
+                                var norm = val.replace(/\s+/g, ' ').trim();
+                                var fa = lookupPersian(norm);
                                 if (!fa) continue;
                                 var map = st.origAttr.get(el) || {};
                                 var prev = map[attr];
@@ -850,6 +730,9 @@ object AntigravityJsBridge {
 
                 function applyAll() {
                     var cfg = window.__agyBidiCfg || { enableBidi: true, enablePersianUi: false };
+                    if (cfg.enablePersianUi && !st.faDict) {
+                        ensureFaDictLoaded();
+                    }
                     if (st.applying) return;
                     st.applying = true;
                     try {
