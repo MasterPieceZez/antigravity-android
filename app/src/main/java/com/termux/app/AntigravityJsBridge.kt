@@ -21,6 +21,18 @@ object AntigravityJsBridge {
     const val VAZIRMATN_ASSET_URL = "https://appassets.androidplatform.net/assets/fonts/Vazirmatn-NL.woff2"
     const val FA_DICT_ASSET_URL = "https://appassets.androidplatform.net/assets/i18n/fa.json"
 
+    @Volatile
+    private var cachedFaDictJson: String? = null
+
+    fun preloadPersianDict(context: Context): String? {
+        cachedFaDictJson?.let { return it }
+        return runCatching {
+            context.assets.open("i18n/fa.json").bufferedReader(Charsets.UTF_8).use { it.readText().trim() }
+        }.getOrNull()?.takeIf { it.startsWith("{") && it.endsWith("}") }?.also {
+            cachedFaDictJson = it
+        }
+    }
+
     fun isBidiRtlEnabled(prefs: SharedPreferences): Boolean =
         prefs.getBoolean(KEY_BIDI_RTL_ENABLED, DEFAULT_BIDI_RTL_ENABLED)
 
@@ -369,16 +381,30 @@ object AntigravityJsBridge {
     }
 
     /**
-     * Builds the idempotent, live-toggleable JavaScript for Smart BiDi/RTL layout,
+     * Builds the idempotent, zero-flash JavaScript for Smart BiDi/RTL layout,
      * offline Vazirmatn font loading, and React-safe Persian UI chrome translation.
      */
-    fun buildPersianBidiJs(enableBidi: Boolean, enablePersianUi: Boolean): String {
+    fun buildPersianBidiJs(context: Context, enableBidi: Boolean, enablePersianUi: Boolean): String =
+        buildPersianBidiJs(
+            enableBidi = enableBidi,
+            enablePersianUi = enablePersianUi,
+            inlineFaJson = if (enablePersianUi) preloadPersianDict(context) else null
+        )
+
+    @JvmOverloads
+    fun buildPersianBidiJs(
+        enableBidi: Boolean,
+        enablePersianUi: Boolean,
+        inlineFaJson: String? = if (enablePersianUi) cachedFaDictJson else null
+    ): String {
         val qFontUrl = quoteJsString(VAZIRMATN_ASSET_URL)
         val qDictUrl = quoteJsString(FA_DICT_ASSET_URL)
+        val embeddedDict = if (enablePersianUi && !inlineFaJson.isNullOrBlank()) inlineFaJson else "null"
         return """
             (function() {
                 var enableBidi = $enableBidi;
                 var enablePersianUi = $enablePersianUi;
+                var inlineDict = $embeddedDict;
                 window.__agyBidiCfg = { enableBidi: enableBidi, enablePersianUi: enablePersianUi };
 
                 var st = window.__agyBidiState || (window.__agyBidiState = {
@@ -390,17 +416,22 @@ object AntigravityJsBridge {
                     faDictLoading: false,
                     observerInstalled: false,
                     observer: null,
-                    timer: null,
                     applying: false
                 });
+
+                if (inlineDict && typeof inlineDict === 'object') {
+                    st.faDict = inlineDict;
+                }
 
                 var STYLE_ID = 'agy-bidi-style';
                 var BIDI_TARGET_SEL = 'p, li, h1, h2, h3, h4, h5, h6, blockquote, textarea, [contenteditable="true"], [class*="prose"], [class*="markdown"], [data-testid*="message"], [class*="message-content"], [class*="message-body"], [class*="chat-message"]';
                 var CODE_LOCK_SEL = 'pre, code, kbd, samp, .monaco-editor, .xterm, [class*="diff-"], [class*="-diff"], [class*="diffEditor"], [class*="DiffEditor"], [class*="bg-diffEditor"], [class*="terminal-"], [class*="-terminal"], .terminal, [data-testid*="terminal"], [data-testid*="diff"]';
                 var HARD_SKIP_SEL = 'pre, code, kbd, samp, script, style, noscript, svg, .monaco-editor, .xterm, [class*="diff-"], [class*="-diff"], [class*="diffEditor"], [class*="DiffEditor"], [class*="bg-diffEditor"], [class*="terminal-"], [class*="-terminal"], .terminal, [data-testid*="terminal"], [data-testid*="diff"]';
                 var CHAT_PROSE_SEL = '[data-testid="live-user-turn"], [data-testid="live-agent-turn"], [data-testid*="message-content"], [class*="message-content"], [class*="message-body"], .prose, [class*="prose "], [class*=" prose"], [class*="markdown"]';
-                var CHROME_CONTAINER_SEL = '[role="dialog"], [role="menu"], nav, aside, header, [class*="settings"], [data-testid*="settings"], [class*="sidebar"], [class*="toolbar"]';
+                var CHROME_CONTAINER_SEL = '[role="dialog"], [role="menu"], [role="listbox"], [data-radix-popper-content-wrapper], nav, aside, header, [class*="settings"], [data-testid*="settings"], [class*="sidebar"], [class*="toolbar"], [class*="popover"], [class*="sheet"]';
+                var PANEL_RTL_SEL = '[role="dialog"], [role="menu"], [role="listbox"], [data-radix-popper-content-wrapper], [class*="popover"], [class*="sheet"], [class*="settings"]';
                 var KBD_BADGE_RE = /^(?:Ctrl|Cmd|Alt|Shift|Meta|CmdOrCtrl|Opt|⌘|⌥|⌃|⇧)(?:\s*\+\s*[^\s]+)+$/i;
+                var LTR_VALUE_RE = /^(?:(?:Ctrl|Cmd|Alt|Shift|Meta|CmdOrCtrl|Opt|⌘|⌥|⌃|⇧)(?:\s*\+\s*[^\s]+)+|#[0-9a-fA-F]{3,8}|-?\d+(?:\.\d+)?(?:px|rem|em|vh|vw|%|ms|s))$/i;
 
                 function ensureFaDictLoaded() {
                     if (st.faDict || st.faDictLoading) return;
@@ -419,6 +450,16 @@ object AntigravityJsBridge {
                         .catch(function() {
                             st.faDictLoading = false;
                         });
+                }
+
+                function translateDurationFa(dur) {
+                    return String(dur || '')
+                        .replace(/\b(\d+)\s*days?\b/gi, '$1 روز')
+                        .replace(/\b(\d+)\s*hours?\b/gi, '$1 ساعت')
+                        .replace(/\b(\d+)\s*minutes?\b/gi, '$1 دقیقه')
+                        .replace(/\b(\d+)\s*seconds?\b/gi, '$1 ثانیه')
+                        .replace(/\band\b/gi, 'و')
+                        .replace(/,\s*/g, '، ');
                 }
 
                 function lookupPersian(norm) {
@@ -467,8 +508,20 @@ object AntigravityJsBridge {
                     if ((m = norm.match(/^(\d+)\s*(?:d|days?)\s+ago$/i))) {
                         return m[1] + ' روز پیش';
                     }
+                    if ((m = norm.match(/^(\d+)\s*(?:w|wk|weeks?)\s+ago$/i))) {
+                        return m[1] + ' هفته پیش';
+                    }
                     if ((m = norm.match(/^Available AI credits:\s*(.+)$/i))) {
                         return 'اعتبار هوش مصنوعی در دسترس: ' + m[1];
+                    }
+                    if ((m = norm.match(/^Your plan:\s*(.+)$/i))) {
+                        return 'طرح شما: ' + m[1];
+                    }
+                    if ((m = norm.match(/^You have used some of your weekly limit,\s*it will fully refresh in\s+(.+?)\.?$/i))) {
+                        return 'بخشی از سهمیه هفتگی شما مصرف شده است و در ' + translateDurationFa(m[1]) + ' به‌طور کامل بازنشانی می‌شود.';
+                    }
+                    if ((m = norm.match(/^You have used some of your 5-hour limit,\s*it will fully refresh in\s+(.+?)\.?$/i))) {
+                        return 'بخشی از سهمیه ۵ ساعته شما مصرف شده است و در ' + translateDurationFa(m[1]) + ' به‌طور کامل بازنشانی می‌شود.';
                     }
                     if ((m = norm.match(/^Choose\s+(.+?)'s\s+Voice$/i))) {
                         return 'انتخاب صدای ' + m[1];
@@ -487,9 +540,6 @@ object AntigravityJsBridge {
                     }
                     if ((m = norm.match(/^When toggled on,\s+(.+?)\s+will use your AI credits to fulfill model requests once you're out of model quota\./i))) {
                         return 'در صورت فعال بودن، پس از پایان سهمیه مدل از اعتبار هوش مصنوعی برای پاسخگویی استفاده می‌شود. همیشه ابتدا سهمیه مدل مصرف می‌شود.';
-                    }
-                    if ((m = norm.match(/^(\d+)\s*(?:w|wk|weeks?)\s+ago$/i))) {
-                        return m[1] + ' هفته پیش';
                     }
                     return null;
                 }
@@ -563,22 +613,29 @@ object AntigravityJsBridge {
                     }
                 }
 
+                function applyBidiEl(cfg, el) {
+                    if (!el || el.nodeType !== 1) return;
+                    if (el.closest && el.closest(CODE_LOCK_SEL)) return;
+                    if (!st.origDir.has(el)) {
+                        st.origDir.set(el, el.hasAttribute('dir') ? el.getAttribute('dir') : null);
+                    }
+                    if (el.getAttribute('dir') !== 'auto') {
+                        el.setAttribute('dir', 'auto');
+                    }
+                    if (el.getAttribute('data-agy-bidi') !== '1') {
+                        el.setAttribute('data-agy-bidi', '1');
+                    }
+                }
+
                 function applyBidi(cfg, root) {
-                    if (!root) return;
+                    if (!root || root.nodeType !== 1) return;
                     if (cfg.enableBidi) {
+                        if (root.matches && root.matches(BIDI_TARGET_SEL)) {
+                            applyBidiEl(cfg, root);
+                        }
                         var nodes = root.querySelectorAll ? root.querySelectorAll(BIDI_TARGET_SEL) : [];
                         for (var i = 0; i < nodes.length; i++) {
-                            var el = nodes[i];
-                            if (el.closest && el.closest(CODE_LOCK_SEL)) continue;
-                            if (!st.origDir.has(el)) {
-                                st.origDir.set(el, el.hasAttribute('dir') ? el.getAttribute('dir') : null);
-                            }
-                            if (el.getAttribute('dir') !== 'auto') {
-                                el.setAttribute('dir', 'auto');
-                            }
-                            if (el.getAttribute('data-agy-bidi') !== '1') {
-                                el.setAttribute('data-agy-bidi', '1');
-                            }
+                            applyBidiEl(cfg, nodes[i]);
                         }
                     } else {
                         var marked = root.querySelectorAll ? root.querySelectorAll('[data-agy-bidi="1"]') : [];
@@ -637,22 +694,82 @@ object AntigravityJsBridge {
                     }
                 }
 
-                function lockShortcutBadges(root) {
-                    if (!root || !root.querySelectorAll) return;
-                    var candidates = root.querySelectorAll('kbd, [class*="shortcut"], [class*="keybind"], [class*="accelerator"], span, code');
-                    for (var i = 0; i < candidates.length; i++) {
-                        var el = candidates[i];
+                function applyPanelRtl(root) {
+                    if (!root || root.nodeType !== 1) return;
+                    if (root.matches && root.matches(PANEL_RTL_SEL) && !(root.closest && root.closest(HARD_SKIP_SEL))) {
+                        markChromeDir(root, 'rtl', 'data-agy-fa-rtl');
+                    }
+                    var panels = root.querySelectorAll ? root.querySelectorAll(PANEL_RTL_SEL) : [];
+                    for (var i = 0; i < panels.length; i++) {
+                        var p = panels[i];
+                        if (p.closest && p.closest(HARD_SKIP_SEL)) continue;
+                        markChromeDir(p, 'rtl', 'data-agy-fa-rtl');
+                    }
+                }
+
+                function lockLtrValues(root) {
+                    if (!root || root.nodeType !== 1) return;
+                    var checkEl = function(el) {
+                        if (!el || el.nodeType !== 1) return;
                         if (el.tagName === 'KBD' || (el.className && typeof el.className === 'string' && /shortcut|keybind|accelerator/i.test(el.className))) {
                             if (el.childElementCount === 0 || el.tagName === 'KBD') {
                                 markChromeDir(el, 'ltr', 'data-agy-kbd');
                             }
-                            continue;
+                            return;
                         }
                         if (el.childElementCount === 0) {
                             var t = (el.textContent || '').trim();
-                            if (t && t.length <= 32 && KBD_BADGE_RE.test(t)) {
+                            if (t && t.length <= 36 && LTR_VALUE_RE.test(t)) {
                                 markChromeDir(el, 'ltr', 'data-agy-kbd');
                             }
+                        }
+                    };
+                    checkEl(root);
+                    var candidates = root.querySelectorAll ? root.querySelectorAll('kbd, [class*="shortcut"], [class*="keybind"], [class*="accelerator"], span, code, div') : [];
+                    for (var i = 0; i < candidates.length; i++) {
+                        checkEl(candidates[i]);
+                    }
+                }
+
+                function translateSingleTextNode(node, translate) {
+                    if (!node || node.nodeType !== 3) return;
+                    var parent = node.parentElement;
+                    if (!parent) return;
+                    if (translate) {
+                        var tag = parent.tagName;
+                        if (tag === 'TEXTAREA' || tag === 'INPUT' || isExcludedChrome(parent)) return;
+                        if (parent.closest && parent.closest('[contenteditable="true"]')) return;
+                        var raw = node.nodeValue;
+                        if (!raw) return;
+                        var norm = raw.replace(/\s+/g, ' ').trim();
+                        if (!norm) return;
+                        if (LTR_VALUE_RE.test(norm)) {
+                            markChromeDir(parent, 'ltr', 'data-agy-kbd');
+                            return;
+                        }
+                        var fa = lookupPersian(norm);
+                        if (!fa) return;
+                        var lead = raw.match(/^\s*/)[0];
+                        var trail = raw.match(/\s*$/)[0];
+                        var nextVal = lead + fa + trail;
+                        var rec = st.origText.get(node);
+                        if (!rec || raw !== rec.translated) {
+                            st.origText.set(node, { orig: raw, translated: nextVal });
+                        }
+                        if (node.nodeValue !== nextVal) {
+                            node.nodeValue = nextVal;
+                        }
+                        var rtlHost = parent.closest('h1, h2, h3, h4, h5, h6, p, label, button, a, summary, [role="menuitem"], [role="option"], [role="tab"], [class*="settings-row"]') || parent;
+                        if (!rtlHost.closest('[data-agy-kbd="1"]')) {
+                            markChromeDir(rtlHost, 'rtl', 'data-agy-fa-rtl');
+                        }
+                    } else {
+                        var saved = st.origText.get(node);
+                        if (saved) {
+                            if (node.nodeValue === saved.translated) {
+                                node.nodeValue = saved.orig;
+                            }
+                            st.origText.delete(node);
                         }
                     }
                 }
@@ -662,88 +779,55 @@ object AntigravityJsBridge {
                     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
                     var node;
                     while ((node = walker.nextNode())) {
-                        var parent = node.parentElement;
-                        if (!parent) continue;
-                        if (translate) {
-                            var tag = parent.tagName;
-                            if (tag === 'TEXTAREA' || tag === 'INPUT' || isExcludedChrome(parent)) continue;
-                            if (parent.closest && parent.closest('[contenteditable="true"]')) continue;
-                            var raw = node.nodeValue;
-                            if (!raw) continue;
-                            var norm = raw.replace(/\s+/g, ' ').trim();
-                            if (!norm) continue;
-                            if (KBD_BADGE_RE.test(norm)) {
-                                markChromeDir(parent, 'ltr', 'data-agy-kbd');
-                                continue;
-                            }
+                        translateSingleTextNode(node, translate);
+                    }
+                }
+
+                function translateElementAttributes(el, translate) {
+                    if (!el || el.nodeType !== 1) return;
+                    var attrs = ['placeholder', 'aria-label', 'title'];
+                    if (translate) {
+                        if (isExcludedChrome(el)) return;
+                        for (var a = 0; a < attrs.length; a++) {
+                            var attr = attrs[a];
+                            var val = el.getAttribute(attr);
+                            if (!val) continue;
+                            var norm = val.replace(/\s+/g, ' ').trim();
                             var fa = lookupPersian(norm);
                             if (!fa) continue;
-                            var lead = raw.match(/^\s*/)[0];
-                            var trail = raw.match(/\s*$/)[0];
-                            var nextVal = lead + fa + trail;
-                            var rec = st.origText.get(node);
-                            if (!rec || raw !== rec.translated) {
-                                st.origText.set(node, { orig: raw, translated: nextVal });
+                            var map = st.origAttr.get(el) || {};
+                            var prev = map[attr];
+                            if (!prev || val !== prev.translated) {
+                                map[attr] = { orig: val, translated: fa };
+                                st.origAttr.set(el, map);
                             }
-                            if (node.nodeValue !== nextVal) {
-                                node.nodeValue = nextVal;
+                            if (val !== fa) {
+                                el.setAttribute(attr, fa);
                             }
-                            var rtlHost = parent.closest('h1, h2, h3, h4, h5, h6, p, label, button, a, summary, [role="menuitem"], [role="option"], [role="tab"], [class*="settings-row"]') || parent;
-                            if (!rtlHost.closest('[data-agy-kbd="1"]')) {
-                                markChromeDir(rtlHost, 'rtl', 'data-agy-fa-rtl');
+                            if (attr === 'placeholder' && el.tagName !== 'TEXTAREA' && !(el.closest && el.closest('[contenteditable="true"]'))) {
+                                markChromeDir(el, 'rtl', 'data-agy-fa-rtl');
                             }
-                        } else {
-                            var saved = st.origText.get(node);
-                            if (saved) {
-                                if (node.nodeValue === saved.translated) {
-                                    node.nodeValue = saved.orig;
+                        }
+                    } else {
+                        var savedMap = st.origAttr.get(el);
+                        if (savedMap) {
+                            for (var k = 0; k < attrs.length; k++) {
+                                var key = attrs[k];
+                                if (savedMap[key] && el.getAttribute(key) === savedMap[key].translated) {
+                                    el.setAttribute(key, savedMap[key].orig);
                                 }
-                                st.origText.delete(node);
                             }
+                            st.origAttr.delete(el);
                         }
                     }
                 }
 
                 function translateAttributes(root, translate) {
                     if (!root || !root.querySelectorAll) return;
-                    var attrs = ['placeholder', 'aria-label', 'title'];
+                    translateElementAttributes(root, translate);
                     var els = root.querySelectorAll('[placeholder], [aria-label], [title]');
                     for (var i = 0; i < els.length; i++) {
-                        var el = els[i];
-                        if (translate) {
-                            if (isExcludedChrome(el)) continue;
-                            for (var a = 0; a < attrs.length; a++) {
-                                var attr = attrs[a];
-                                var val = el.getAttribute(attr);
-                                if (!val) continue;
-                                var norm = val.replace(/\s+/g, ' ').trim();
-                                var fa = lookupPersian(norm);
-                                if (!fa) continue;
-                                var map = st.origAttr.get(el) || {};
-                                var prev = map[attr];
-                                if (!prev || val !== prev.translated) {
-                                    map[attr] = { orig: val, translated: fa };
-                                    st.origAttr.set(el, map);
-                                }
-                                if (val !== fa) {
-                                    el.setAttribute(attr, fa);
-                                }
-                                if (attr === 'placeholder' && el.tagName !== 'TEXTAREA' && !(el.closest && el.closest('[contenteditable="true"]'))) {
-                                    markChromeDir(el, 'rtl', 'data-agy-fa-rtl');
-                                }
-                            }
-                        } else {
-                            var savedMap = st.origAttr.get(el);
-                            if (savedMap) {
-                                for (var k = 0; k < attrs.length; k++) {
-                                    var key = attrs[k];
-                                    if (savedMap[key] && el.getAttribute(key) === savedMap[key].translated) {
-                                        el.setAttribute(key, savedMap[key].orig);
-                                    }
-                                }
-                                st.origAttr.delete(el);
-                            }
-                        }
+                        translateElementAttributes(els[i], translate);
                     }
                 }
 
@@ -758,10 +842,13 @@ object AntigravityJsBridge {
                         syncStyle(cfg);
                         if (document.body) {
                             applyBidi(cfg, document.body);
+                            if (cfg.enablePersianUi) {
+                                applyPanelRtl(document.body);
+                            }
                             translateTextNodes(document.body, !!cfg.enablePersianUi);
                             translateAttributes(document.body, !!cfg.enablePersianUi);
                             if (cfg.enablePersianUi) {
-                                lockShortcutBadges(document.body);
+                                lockLtrValues(document.body);
                             } else {
                                 restoreChromeDirs(document.body);
                             }
@@ -774,24 +861,64 @@ object AntigravityJsBridge {
                     }
                 }
 
-                function scheduleApply() {
+                function handleMutations(mutations) {
                     if (st.applying) return;
-                    if (st.timer) clearTimeout(st.timer);
-                    st.timer = setTimeout(function() {
-                        st.timer = null;
-                        applyAll();
-                    }, 80);
+                    var cfg = window.__agyBidiCfg || { enableBidi: true, enablePersianUi: false };
+                    if (!cfg.enableBidi && !cfg.enablePersianUi) return;
+                    if (cfg.enablePersianUi && !st.faDict) {
+                        ensureFaDictLoaded();
+                    }
+                    st.applying = true;
+                    try {
+                        if (!document.getElementById(STYLE_ID)) {
+                            syncStyle(cfg);
+                        }
+                        for (var i = 0; i < mutations.length; i++) {
+                            var m = mutations[i];
+                            if (m.type === 'characterData') {
+                                if (cfg.enablePersianUi) {
+                                    translateSingleTextNode(m.target, true);
+                                }
+                            } else if (m.type === 'attributes') {
+                                if (cfg.enablePersianUi && m.target && m.target.nodeType === 1) {
+                                    translateElementAttributes(m.target, true);
+                                }
+                            } else if (m.type === 'childList' && m.addedNodes) {
+                                for (var j = 0; j < m.addedNodes.length; j++) {
+                                    var node = m.addedNodes[j];
+                                    if (node.nodeType === 3) {
+                                        if (cfg.enablePersianUi) {
+                                            translateSingleTextNode(node, true);
+                                        }
+                                    } else if (node.nodeType === 1) {
+                                        if (cfg.enableBidi) {
+                                            applyBidi(cfg, node);
+                                        }
+                                        if (cfg.enablePersianUi) {
+                                            applyPanelRtl(node);
+                                            translateTextNodes(node, true);
+                                            translateAttributes(node, true);
+                                            lockLtrValues(node);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e) {} finally {
+                        if (st.observer && typeof st.observer.takeRecords === 'function') {
+                            try { st.observer.takeRecords(); } catch (e) {}
+                        }
+                        st.applying = false;
+                    }
                 }
 
                 function ensureObserver() {
                     if (st.observerInstalled) return;
-                    if (!document.body) {
-                        setTimeout(ensureObserver, 150);
-                        return;
-                    }
+                    var observeRoot = document.documentElement || document.body;
+                    if (!observeRoot) return;
                     st.observerInstalled = true;
-                    st.observer = new MutationObserver(scheduleApply);
-                    st.observer.observe(document.body, {
+                    st.observer = new MutationObserver(handleMutations);
+                    st.observer.observe(observeRoot, {
                         childList: true,
                         subtree: true,
                         characterData: true,

@@ -56,6 +56,7 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.ContextCompat
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -153,6 +154,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private var pendingRestoreSheetProgress: ProgressBar? = null
     private var pendingRestoreSheetStatus: TextView? = null
     private var pendingRestoreDialog: BottomSheetDialog? = null
+    private var persianBidiScriptHandler: ScriptHandler? = null
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -379,12 +381,28 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         webView.evaluateJavascript(AntigravityJsBridge.AGENT_BRIDGE_JS, null)
     }
 
+    private fun registerDocumentStartPersianBidiScript() {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+        runCatching { persianBidiScriptHandler?.remove() }
+        val allowedOrigins = setOf(
+            "http://localhost:${AntigravityEngine.HUB_PORT}",
+            "http://127.0.0.1:${AntigravityEngine.HUB_PORT}"
+        )
+        val enableBidi = AntigravityJsBridge.isBidiRtlEnabled(this)
+        val enablePersianUi = AntigravityJsBridge.isPersianUiEnabled(this)
+        val script = AntigravityJsBridge.buildPersianBidiJs(this, enableBidi, enablePersianUi)
+        persianBidiScriptHandler = runCatching {
+            WebViewCompat.addDocumentStartJavaScript(webView, script, allowedOrigins)
+        }.getOrNull()
+    }
+
     private fun injectPersianBidiBridge(targetUrl: String? = webView.url) {
+        registerDocumentStartPersianBidiScript()
         if (!AntigravityFileHelper.isTrustedHubUri(targetUrl)) return
         val enableBidi = AntigravityJsBridge.isBidiRtlEnabled(this)
         val enablePersianUi = AntigravityJsBridge.isPersianUiEnabled(this)
         webView.evaluateJavascript(
-            AntigravityJsBridge.buildPersianBidiJs(enableBidi, enablePersianUi),
+            AntigravityJsBridge.buildPersianBidiJs(this, enableBidi, enablePersianUi),
             null
         )
     }
@@ -565,6 +583,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         } else {
             webView.addJavascriptInterface(LegacyAntigravityJsInterface(), "AntigravityAndroid")
         }
+        registerDocumentStartPersianBidiScript()
 
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             val guessedName = URLUtil.guessFileName(url, contentDisposition, mimeType)
@@ -710,6 +729,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 view?.let {
                     it.stopLoading()
                     it.webChromeClient = null
+                    runCatching { persianBidiScriptHandler?.remove() }
+                    persianBidiScriptHandler = null
                     if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
                         runCatching { WebViewCompat.removeWebMessageListener(it, "AntigravityBridge") }
                     } else {
@@ -2095,6 +2116,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         runCatching {
             webView.stopLoading()
             webView.webChromeClient = null
+            runCatching { persianBidiScriptHandler?.remove() }
+            persianBidiScriptHandler = null
             if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
                 runCatching { WebViewCompat.removeWebMessageListener(webView, "AntigravityBridge") }
             } else {

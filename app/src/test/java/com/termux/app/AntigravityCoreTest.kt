@@ -484,8 +484,17 @@ class AntigravityCoreTest {
         assertTrue(persianUiOnly.contains("var enablePersianUi = true;"))
         assertTrue(persianUiOnly.contains(AntigravityJsBridge.FA_DICT_ASSET_URL))
         assertTrue(persianUiOnly.contains("replace(/\\s+/g, ' ').trim()"))
+        assertTrue(persianUiOnly.contains("handleMutations"))
+        assertTrue(persianUiOnly.contains("translateDurationFa"))
         assertTrue(persianUiOnly.contains("data-agy-fa-rtl"))
         assertTrue(persianUiOnly.contains("data-agy-kbd"))
+
+        val withInlineDict = AntigravityJsBridge.buildPersianBidiJs(
+            enableBidi = true,
+            enablePersianUi = true,
+            inlineFaJson = """{"Add Context":"افزودن زمینه"}"""
+        )
+        assertTrue(withInlineDict.contains("""var inlineDict = {"Add Context":"افزودن زمینه"};"""))
 
         val bothOff = AntigravityJsBridge.buildPersianBidiJs(enableBidi = false, enablePersianUi = false)
         assertTrue(bothOff.contains("var enableBidi = false;"))
@@ -509,6 +518,9 @@ class AntigravityCoreTest {
         assertTrue(json.contains("\"Keyboard shortcuts for quick navigation and control.\":"))
         assertTrue(json.contains("\"Notification Preferences\":"))
         assertTrue(json.contains("\"Browser Actuation Permissions\":"))
+        assertTrue(json.contains("\"Add Context\":"))
+        assertTrue(json.contains("\"Weekly Limit Remaining\":"))
+        assertTrue(json.contains("\"Code Preview\":"))
         assertTrue(json.contains("\"پروژه‌ها\""))
     }
 
