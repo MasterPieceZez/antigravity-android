@@ -855,5 +855,16 @@
   "(tell the agent what to do)": "(به ایجنت بگویید چه کار کند)",
   "(tell the agent what to do": "(به ایجنت بگویید چه کار کند)",
   "Skip": "رد شدن",
-  "Submit": "ارسال"
+  "Submit": "ارسال",
+  "Thinking effort": "سطح تفکر",
+  "Thinking Effort": "سطح تفکر",
+  "Thinking Level": "سطح تفکر",
+  "Controls how much time and quota the model spends reasoning before responding. Higher effort improves accuracy on hard problems, at the cost of slower responses and higher quota use.": "تعیین می‌کند مدل پیش از پاسخگویی چه مقدار زمان و سهمیه صرف استدلال کند. سطح بالاتر دقت را در مسائل دشوار افزایش می‌دهد، اما پاسخ‌ها کندتر و مصرف سهمیه بیشتر می‌شود.",
+  "Best of N Models": "مدل‌های بهترین از N",
+  "Minimal": "حداقل",
+  "Photos & Gallery": "گالری و تصاویر",
+  "Confirm": "تایید",
+  "This undo action will not make any code changes.": "این عملیات بازگردانی هیچ تغییری در کد ایجاد نخواهد کرد.",
+  "Confirming this undo action will make the following changes:": "تایید این عملیات بازگردانی تغییرات زیر را اعمال خواهد کرد:",
+  "The agent made no code changes, but other files may still be affected if your workspace changed for other reasons (e.g. a sync) in the meantime.": "ایجنت تغییری در کد ایجاد نکرده است، اما اگر فضای کاری شما به دلایل دیگر تغییر کرده باشد، ممکن است فایل‌های دیگر تحت تاثیر قرار گیرند."
 }

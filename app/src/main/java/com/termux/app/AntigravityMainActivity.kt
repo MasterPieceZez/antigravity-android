@@ -891,7 +891,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     it.destroy()
                 }
                 if (parent != null) {
-                    val fresh = WebView(this@AntigravityMainActivity).apply {
+                    val fresh = AntigravityWebView(this@AntigravityMainActivity).apply {
                         id = R.id.agy_webview
                         if (lp != null) layoutParams = lp
                     }
@@ -1025,37 +1025,11 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 val isImageOnly = acceptTypes.isNotEmpty() && acceptTypes.all {
                     it == "image/*" || it.startsWith("image/") || it in IMAGE_EXTENSIONS
                 }
-                val acceptsAll = acceptTypes.isEmpty() || acceptTypes.any { it == "*/*" }
 
-                when {
-                    isImageOnly -> launchPhotoPicker(isMultiple)
-                    acceptsAll -> {
-                        var picked = false
-                        val options = arrayOf(
-                            getString(R.string.agy_attach_photos_gallery),
-                            getString(R.string.agy_attach_files_documents)
-                        )
-                        val dlg = AlertDialog.Builder(this@AntigravityMainActivity)
-                            .setTitle(R.string.agy_dialog_attach_title)
-                            .setItems(options) { _, which ->
-                                picked = true
-                                if (which == 0) {
-                                    launchPhotoPicker(isMultiple)
-                                } else {
-                                    launchSystemFilePicker(fileChooserParams)
-                                }
-                            }
-                            .setNegativeButton(R.string.agy_btn_cancel, null)
-                            .create()
-                        dlg.setOnDismissListener {
-                            if (!picked) {
-                                fileUploadCallback?.onReceiveValue(null)
-                                fileUploadCallback = null
-                            }
-                        }
-                        dlg.show()
-                    }
-                    else -> launchSystemFilePicker(fileChooserParams)
+                if (isImageOnly) {
+                    launchPhotoPicker(isMultiple)
+                } else {
+                    launchSystemFilePicker(fileChooserParams)
                 }
                 return true
             }
@@ -1104,7 +1078,10 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     }
 
     private fun registerWebViewReceiveContentListener() {
-        ViewCompat.setOnReceiveContentListener(webView, arrayOf("image/*")) { _, payload ->
+        ViewCompat.setOnReceiveContentListener(
+            webView,
+            arrayOf("image/*", "image/png", "image/jpeg", "image/webp", "image/gif")
+        ) { _, payload ->
             if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) {
                 return@setOnReceiveContentListener payload
             }

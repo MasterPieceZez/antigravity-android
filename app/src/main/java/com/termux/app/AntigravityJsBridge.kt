@@ -725,11 +725,88 @@ object AntigravityJsBridge {
                 });
             }
 
+            function ensureGalleryAttachMenuItem() {
+                try {
+                    var uploadInput = document.querySelector('input[data-testid="upload-project-files-input"]');
+                    if (!uploadInput || !uploadInput.parentElement || !uploadInput.parentElement.parentNode) return;
+                    var wrapper = uploadInput.parentElement;
+                    var uploadBtn = wrapper.querySelector('button, [role="button"]');
+                    if (!uploadBtn) return;
+                    var fa = isFaUi();
+                    var labelTxt = fa ? 'گالری و تصاویر' : 'Photos & Gallery';
+                    var existingWrap = document.getElementById('agy-upload-gallery-wrap');
+                    if (existingWrap) {
+                        var existingLabel = existingWrap.querySelector('[data-agy-gallery-label="1"]');
+                        if (existingLabel && existingLabel.textContent !== labelTxt) {
+                            existingLabel.textContent = labelTxt;
+                        }
+                        if (existingWrap.previousSibling !== wrapper) {
+                            wrapper.parentNode.insertBefore(existingWrap, wrapper.nextSibling);
+                        }
+                        return;
+                    }
+                    var galleryWrap = document.createElement('div');
+                    galleryWrap.id = 'agy-upload-gallery-wrap';
+                    galleryWrap.className = wrapper.className || 'relative';
+                    var btn = uploadBtn.cloneNode(true);
+                    btn.id = 'agy-upload-gallery-btn';
+                    btn.setAttribute('type', 'button');
+                    btn.setAttribute('data-testid', 'agy-upload-gallery-button');
+                    var svg = btn.querySelector('svg');
+                    if (svg) {
+                        var svgCls = svg.getAttribute('class') || '';
+                        var svgW = svg.getAttribute('width') || '16';
+                        var svgH = svg.getAttribute('height') || '16';
+                        var newSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                        newSvg.setAttribute('viewBox', '0 0 24 24');
+                        newSvg.setAttribute('width', svgW);
+                        newSvg.setAttribute('height', svgH);
+                        newSvg.setAttribute('fill', 'currentColor');
+                        newSvg.setAttribute('aria-hidden', 'true');
+                        if (svgCls) newSvg.setAttribute('class', svgCls);
+                        newSvg.innerHTML = '<path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>';
+                        svg.parentNode.replaceChild(newSvg, svg);
+                    }
+                    var walker = document.createTreeWalker(btn, NodeFilter.SHOW_TEXT, null);
+                    var tn;
+                    var replacedLabel = false;
+                    while ((tn = walker.nextNode())) {
+                        if (tn.nodeValue && tn.nodeValue.trim().length > 0) {
+                            tn.nodeValue = labelTxt;
+                            if (tn.parentElement) tn.parentElement.setAttribute('data-agy-gallery-label', '1');
+                            replacedLabel = true;
+                            break;
+                        }
+                    }
+                    if (!replacedLabel) {
+                        var span = document.createElement('span');
+                        span.setAttribute('data-agy-gallery-label', '1');
+                        span.textContent = labelTxt;
+                        btn.appendChild(span);
+                    }
+                    btn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        try {
+                            uploadInput.setAttribute('accept', 'image/*');
+                            uploadInput.click();
+                        } finally {
+                            setTimeout(function() {
+                                try { uploadInput.removeAttribute('accept'); } catch (err) {}
+                            }, 300);
+                        }
+                    });
+                    galleryWrap.appendChild(btn);
+                    wrapper.parentNode.insertBefore(galleryWrap, wrapper.nextSibling);
+                } catch (e) {}
+            }
+
             var uiInjectScheduled = false;
             function runUiInjections() {
                 uiInjectScheduled = false;
                 ensureHeaderControlsButton();
                 ensureMicTesterCard();
+                ensureGalleryAttachMenuItem();
             }
             function scheduleUiInjections() {
                 if (uiInjectScheduled) return;
@@ -1025,6 +1102,7 @@ object AntigravityJsBridge {
                     };
                     var MODEL_TAG_MAP = {
                         'thinking': 'استدلالی',
+                        'minimal': 'حداقل',
                         'low': 'کم',
                         'medium': 'متوسط',
                         'high': 'زیاد',
@@ -1034,7 +1112,11 @@ object AntigravityJsBridge {
                         'extra': 'بسیار زیاد',
                         'max': 'حداکثر'
                     };
-                    if ((m = norm.match(/^(Gemini 4 Hydrogen|Gemini 3\.8 Flash|Gemini 4 Carbon|Gemini 4 Argon|Gemini 4 Neon|Claude Sonnet 4\.6|Claude Opus 4\.6|GPT-OSS 120B)(?:\s*\((Thinking|Low|Medium|High|Extra High|Very High|XHigh|Extra|Max)\))?$/i))) {
+                    if ((m = norm.match(/^(Minimal|Low|Medium|High|Extra High|Very High|XHigh|Extra|Max)\s*\(Default\)$/i))) {
+                        var defTag = MODEL_TAG_MAP[m[1].toLowerCase()] || m[1];
+                        return defTag + ' (پیش‌فرض)';
+                    }
+                    if ((m = norm.match(/^(Gemini 4 Hydrogen|Gemini 3\.8 Flash|Gemini 4 Carbon|Gemini 4 Argon|Gemini 4 Neon|Claude Sonnet 4\.6|Claude Opus 4\.6|GPT-OSS 120B)(?:\s*\((Thinking|Minimal|Low|Medium|High|Extra High|Very High|XHigh|Extra|Max)\))?$/i))) {
                         var mName = MODEL_NAME_MAP[m[1].toLowerCase()] || m[1];
                         if (m[2]) {
                             var mTag = MODEL_TAG_MAP[m[2].toLowerCase()] || m[2];

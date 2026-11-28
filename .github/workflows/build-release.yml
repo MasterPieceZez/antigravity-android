@@ -227,13 +227,13 @@ jobs:
           TITLE="$TAG"
           if [[ "$EXPECTED_VER" == *-* ]]; then
             PRERELEASE_FLAG="--prerelease"
-            TITLE="$TAG (Super Unstable Beta)"
+            TITLE="$TAG (Early Beta — Super Unstable)"
           fi
           : > release_notes.md
           if [[ "$EXPECTED_VER" == *-* ]]; then
             cat >> release_notes.md <<'EOF'
           > [!WARNING]
-          > **SUPER UNSTABLE BETA (__TAG__):** This pre-release build is experimental and may contain bugs or breaking issues. Use for testing only and create a Full Backup in Control Center before updating.
+          > **EARLY BETA — SUPER UNSTABLE (`__TAG__`):** This stealth pre-release build is experimental and may contain bugs or breaking issues. Use for early testing only and create a Full Backup in Control Center before updating.
 
           EOF
           fi

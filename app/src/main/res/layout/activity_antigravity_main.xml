@@ -7,7 +7,7 @@
     android:fitsSystemWindows="true">
 
     <!-- Main Fullscreen Antigravity WebView -->
-    <WebView
+    <com.termux.app.AntigravityWebView
         android:id="@+id/agy_webview"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
