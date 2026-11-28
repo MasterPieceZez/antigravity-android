@@ -101,6 +101,9 @@
 
     <string name="agy_toast_checking_updates">Checking GitHub Releases…</string>
     <string name="agy_dialog_update_title">Update Available (%1$s)</string>
+    <string name="agy_dialog_hotfix_title">Hotfix Available (%1$s)</string>
+    <string name="agy_dialog_announcement_title">Announcement</string>
+    <string name="agy_btn_open_link">Open</string>
     <string name="agy_dialog_update_msg_lite">Installed: %1$s\nLatest: %2$s\n\nDownload and install the lightweight universal-lite update?</string>
     <string name="agy_dialog_update_msg_full">Installed: %1$s\nLatest: %2$s\n\nDownload and install the updated APK from GitHub Releases?</string>
     <string name="agy_dialog_update_btn">Download &amp; Install</string>

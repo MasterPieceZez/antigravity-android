@@ -1,6 +1,7 @@
 package com.termux.app
 
 import android.content.Context
+import android.os.Build
 import android.os.StatFs
 import android.system.Os
 import kotlinx.coroutines.CoroutineScope
@@ -16,6 +17,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import java.nio.file.Files
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -559,26 +561,66 @@ object BackupRestoreEngine {
 
     private val PACKAGES_ONLY_HOME_SUBDIRS = setOf(".local", ".agents")
 
-    private fun deleteRecursivelySafe(target: File): Boolean {
-        if (!target.exists()) return true
-        runCatching {
-            target.walkBottomUp().forEach { f ->
-                val isLnk = runCatching {
-                    val st = Os.lstat(f.absolutePath)
-                    (st.st_mode and 0b1111000000000000) == 0b1010000000000000 // S_IFLNK
-                }.getOrDefault(false)
-                if (!isLnk) {
-                    if (f.isDirectory) {
-                        f.setReadable(true, true)
-                        f.setWritable(true, true)
-                        f.setExecutable(true, true)
-                    } else {
-                        f.setWritable(true, true)
-                    }
+    private fun isSymlinkFile(file: File): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O || Build.VERSION.SDK_INT == 0) {
+            val nio = runCatching { Files.isSymbolicLink(file.toPath()) }.getOrNull()
+            if (nio != null) return nio
+        }
+        return runCatching {
+            val st = Os.lstat(file.absolutePath)
+            (st.st_mode and 0b1111000000000000) == 0b1010000000000000 // S_IFLNK
+        }.getOrDefault(false)
+    }
+
+    private fun pathExistsNoFollow(file: File): Boolean {
+        if (isSymlinkFile(file)) return true
+        return file.exists()
+    }
+
+    internal fun deleteRecursivelySafe(target: File): Boolean {
+        if (!pathExistsNoFollow(target)) return true
+
+        // Iterative post-order delete that NEVER follows directory symlinks (e.g. ~/storage/shared -> /sdcard)
+        val stack = ArrayDeque<Pair<File, Boolean>>()
+        stack.addLast(target to false)
+        var allOk = true
+
+        while (stack.isNotEmpty()) {
+            val (current, childrenQueued) = stack.removeLast()
+            if (childrenQueued) {
+                if (!current.delete() && pathExistsNoFollow(current)) {
+                    allOk = false
+                }
+                continue
+            }
+
+            if (isSymlinkFile(current)) {
+                val removed = runCatching { Os.remove(current.absolutePath); true }
+                    .getOrElse { current.delete() }
+                if (!removed && pathExistsNoFollow(current)) {
+                    allOk = false
+                }
+                continue
+            }
+
+            if (current.isDirectory) {
+                runCatching {
+                    current.setReadable(true, true)
+                    current.setWritable(true, true)
+                    current.setExecutable(true, true)
+                }
+                stack.addLast(current to true)
+                current.listFiles()?.forEach { child ->
+                    stack.addLast(child to false)
+                }
+            } else {
+                runCatching { current.setWritable(true, true) }
+                if (!current.delete() && pathExistsNoFollow(current)) {
+                    allOk = false
                 }
             }
         }
-        return target.deleteRecursively()
+        return allOk && !pathExistsNoFollow(target)
     }
 
     internal fun swapStagedDirs(filesRoot: File, stagingDir: File): Result<Unit> {

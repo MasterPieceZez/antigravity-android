@@ -43,7 +43,22 @@ data class UpdateReleaseInfo(
     val downloadApkUrl: String?,
     val isLiteApk: Boolean = false,
     val apkFileName: String? = null,
-    val checksumsUrl: String? = null
+    val checksumsUrl: String? = null,
+    val releaseName: String = "",
+    val releaseBody: String = ""
+)
+
+data class PublicAnnouncement(
+    val id: String,
+    val title: String,
+    val titleFa: String = "",
+    val message: String,
+    val messageFa: String = "",
+    val minVersion: String = "",
+    val maxVersion: String = "",
+    val url: String = "",
+    val urgent: Boolean = false,
+    val active: Boolean = true
 )
 
 data class PendingNotification(
@@ -384,6 +399,8 @@ object AntigravityEngine {
             val json = JSONObject(conn.inputStream.bufferedReader().readText())
             val tag = json.optString("tag_name", "").trim()
             val htmlUrl = json.optString("html_url", "https://github.com/MasterPieceZez/antigravity-android/releases")
+            val releaseName = json.optString("name", "").trim()
+            val releaseBody = json.optString("body", "").trim()
             val primaryAbi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
             var universalLiteUrl: String? = null
             var universalLiteName: String? = null
@@ -442,9 +459,58 @@ object AntigravityEngine {
                     downloadApkUrl = bestApk,
                     isLiteApk = bestLite != null,
                     apkFileName = bestName,
-                    checksumsUrl = checksumsUrl
+                    checksumsUrl = checksumsUrl,
+                    releaseName = releaseName,
+                    releaseBody = releaseBody
                 )
             )
+        } catch (e: Exception) {
+            Result.failure(e)
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    fun isAnnouncementApplicable(ann: PublicAnnouncement, currentVersion: String): Boolean {
+        if (!ann.active || ann.id.isBlank() || ann.message.isBlank()) return false
+        if (ann.minVersion.isNotBlank() && compareSemver(currentVersion, ann.minVersion) < 0) return false
+        if (ann.maxVersion.isNotBlank() && compareSemver(currentVersion, ann.maxVersion) > 0) return false
+        return true
+    }
+
+    suspend fun checkPublicAnnouncement(): Result<PublicAnnouncement?> = withContext(Dispatchers.IO) {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = URL("https://raw.githubusercontent.com/MasterPieceZez/antigravity-android/main/announcement.json")
+                .openConnection() as HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 8000
+            conn.requestMethod = "GET"
+            conn.setRequestProperty("Accept", "application/json")
+            conn.setRequestProperty("Cache-Control", "no-cache")
+            conn.setRequestProperty("User-Agent", "AntigravityAndroid/${BuildConfig.VERSION_NAME}")
+            if (conn.responseCode == 404) {
+                return@withContext Result.success(null)
+            }
+            if (conn.responseCode !in 200..299) {
+                return@withContext Result.failure(IllegalStateException("HTTP ${conn.responseCode}"))
+            }
+            val json = JSONObject(conn.inputStream.bufferedReader().readText())
+            val rawUrl = json.optString("url", "").trim()
+            val safeUrl = if (rawUrl.startsWith("https://", ignoreCase = true)) rawUrl else ""
+            val ann = PublicAnnouncement(
+                id = json.optString("id", "").trim(),
+                title = json.optString("title", "").trim(),
+                titleFa = json.optString("title_fa", "").trim(),
+                message = json.optString("message", "").trim(),
+                messageFa = json.optString("message_fa", "").trim(),
+                minVersion = json.optString("min_version", "").trim(),
+                maxVersion = json.optString("max_version", "").trim(),
+                url = safeUrl,
+                urgent = json.optBoolean("urgent", false),
+                active = json.optBoolean("active", false)
+            )
+            Result.success(if (ann.active) ann else null)
         } catch (e: Exception) {
             Result.failure(e)
         } finally {

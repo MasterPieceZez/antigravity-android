@@ -280,7 +280,92 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             registerReceiver(serviceStoppedReceiver, serviceStopFilter)
             registerReceiver(hubUrlUpdatedReceiver, hubUpdateFilter)
         }
+
+        checkForUpdatesAndAnnouncementsOnLaunch()
     }
+
+    private fun checkForUpdatesAndAnnouncementsOnLaunch() {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val currentVer = BuildConfig.VERSION_NAME
+        val currentTag = "v$currentVer"
+        val usePersian = AntigravityJsBridge.isPersianUiEnabled(this) ||
+            java.util.Locale.getDefault().language.equals("fa", ignoreCase = true)
+
+        lifecycleScope.launch {
+            // 1. Public announcement check
+            val ann = AntigravityEngine.checkPublicAnnouncement().getOrNull()
+            if (ann != null && AntigravityEngine.isAnnouncementApplicable(ann, currentVer)) {
+                val dismissedAnnId = prefs.getString("dismissed_announcement_id", null)
+                if (ann.urgent || dismissedAnnId != ann.id) {
+                    if (!isFinishing && !isDestroyed) {
+                        val title = (if (usePersian && ann.titleFa.isNotBlank()) ann.titleFa else ann.title)
+                            .ifBlank { getString(R.string.agy_dialog_announcement_title) }
+                        val body = if (usePersian && ann.messageFa.isNotBlank()) ann.messageFa else ann.message
+                        val builder = AlertDialog.Builder(this@AntigravityMainActivity)
+                            .setTitle(title)
+                            .setMessage(body)
+                            .setNegativeButton(R.string.agy_btn_dismiss) { _, _ ->
+                                prefs.edit().putString("dismissed_announcement_id", ann.id).apply()
+                            }
+                        if (ann.url.isNotBlank()) {
+                            builder.setPositiveButton(R.string.agy_btn_open_link) { _, _ ->
+                                prefs.edit().putString("dismissed_announcement_id", ann.id).apply()
+                                runCatching {
+                                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ann.url)))
+                                }
+                            }
+                        }
+                        builder.show()
+                        return@launch
+                    }
+                }
+            }
+
+            // 2. Automatic GitHub Releases update / hotfix check (throttled to 6 hours)
+            val now = System.currentTimeMillis()
+            val lastCheck = prefs.getLong("last_update_check_ms", 0L)
+            if (now - lastCheck < 6L * 60L * 60L * 1000L) return@launch
+
+            val info = AntigravityEngine.checkLatestRelease().getOrNull() ?: return@launch
+            prefs.edit().putLong("last_update_check_ms", System.currentTimeMillis()).apply()
+            if (info.tagName.isBlank() || !AntigravityEngine.isNewerVersion(info.tagName, currentTag)) return@launch
+
+            val isHotfix = info.releaseName.contains("hotfix", ignoreCase = true) ||
+                info.releaseBody.contains("[HOTFIX]", ignoreCase = true) ||
+                info.releaseBody.contains("hotfix", ignoreCase = true)
+            val dismissedTag = prefs.getString("dismissed_update_tag", null)
+            if (!isHotfix && dismissedTag == info.tagName) return@launch
+            if (isFinishing || isDestroyed) return@launch
+
+            val title = if (isHotfix) {
+                getString(R.string.agy_dialog_hotfix_title, info.tagName)
+            } else {
+                getString(R.string.agy_dialog_update_title, info.tagName)
+            }
+            val msg = getString(
+                if (info.isLiteApk) R.string.agy_dialog_update_msg_lite else R.string.agy_dialog_update_msg_full,
+                currentTag,
+                info.tagName
+            )
+            AlertDialog.Builder(this@AntigravityMainActivity)
+                .setTitle(title)
+                .setMessage(msg)
+                .setPositiveButton(R.string.agy_dialog_update_btn) { _, _ ->
+                    if (info.downloadApkUrl != null) {
+                        startInAppUpdateFlow(info)
+                    } else {
+                        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.releaseUrl))) }
+                    }
+                }
+                .setNegativeButton(R.string.agy_btn_later) { _, _ ->
+                    if (!isHotfix) {
+                        prefs.edit().putString("dismissed_update_tag", info.tagName).apply()
+                    }
+                }
+                .show()
+        }
+    }
+
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

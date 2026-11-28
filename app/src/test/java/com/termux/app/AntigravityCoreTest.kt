@@ -554,4 +554,49 @@ class AntigravityCoreTest {
         assertFalse(AntigravityJsBridge.isBidiRtlEnabled(fakePrefs))
         assertTrue(AntigravityJsBridge.isPersianUiEnabled(fakePrefs))
     }
+
+    @Test
+    fun deleteRecursivelySafe_unlinksDirectorySymlinkWithoutTouchingTarget() {
+        val sandbox = java.nio.file.Files.createTempDirectory("agy-del-test").toFile()
+        try {
+            val externalDir = java.io.File(sandbox, "simulated_sdcard").apply { mkdirs() }
+            val preciousFile = java.io.File(externalDir, "photo.jpg").apply { writeText("keep-me") }
+
+            val backupDir = java.io.File(sandbox, "home.restore-bak").apply { mkdirs() }
+            java.io.File(backupDir, "normal.txt").writeText("delete-me")
+            val storageDir = java.io.File(backupDir, "storage").apply { mkdirs() }
+            java.nio.file.Files.createSymbolicLink(
+                java.io.File(storageDir, "shared").toPath(),
+                externalDir.toPath()
+            )
+            java.nio.file.Files.createSymbolicLink(
+                java.io.File(backupDir, "broken_link").toPath(),
+                java.io.File(sandbox, "does_not_exist").toPath()
+            )
+
+            assertTrue(BackupRestoreEngine.deleteRecursivelySafe(backupDir))
+            assertFalse("backupDir should be deleted", backupDir.exists())
+            assertTrue("externalDir must NOT be deleted", externalDir.isDirectory)
+            assertTrue("preciousFile inside symlink target must NOT be deleted", preciousFile.isFile)
+            assertEquals("keep-me", preciousFile.readText())
+        } finally {
+            sandbox.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun publicAnnouncement_versionTargetingWorks() {
+        val hotfixAnn = PublicAnnouncement(
+            id = "hotfix-1.1.6",
+            title = "Hotfix",
+            message = "Please update",
+            maxVersion = "1.1.5",
+            urgent = true,
+            active = true
+        )
+        assertTrue(AntigravityEngine.isAnnouncementApplicable(hotfixAnn, "1.1.5"))
+        assertTrue(AntigravityEngine.isAnnouncementApplicable(hotfixAnn, "1.1.4"))
+        assertFalse(AntigravityEngine.isAnnouncementApplicable(hotfixAnn, "1.1.6"))
+        assertFalse(AntigravityEngine.isAnnouncementApplicable(hotfixAnn.copy(active = false), "1.1.5"))
+    }
 }

@@ -157,6 +157,9 @@
 
     <string name="agy_toast_checking_updates">در حال بررسی نسخه‌های GitHub…</string>
     <string name="agy_dialog_update_title">نسخه جدید در دسترس است (%1$s)</string>
+    <string name="agy_dialog_hotfix_title">آپدیت فوری در دسترس است (%1$s)</string>
+    <string name="agy_dialog_announcement_title">اطلاعیه</string>
+    <string name="agy_btn_open_link">باز کردن</string>
     <string name="agy_dialog_update_msg_lite">نسخه فعلی: %1$s\nجدیدترین نسخه: %2$s\n\nنسخه سبک آپدیت دانلود و نصب شود؟</string>
     <string name="agy_dialog_update_msg_full">نسخه فعلی: %1$s\nجدیدترین نسخه: %2$s\n\nفایل APK جدید از GitHub Releases دانلود و نصب شود؟</string>
     <string name="agy_dialog_update_btn">دانلود و نصب</string>
