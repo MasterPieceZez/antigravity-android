@@ -10,7 +10,7 @@ import androidx.core.view.inputmethod.EditorInfoCompat
 import androidx.core.view.inputmethod.InputConnectionCompat
 
 /**
- * WebView subclass that advertises ViewCompat OnReceiveContent MIME types (e.g. image/*)
+ * WebView subclass that advertises ViewCompat OnReceiveContent image MIME types
  * on its InputConnection EditorInfo so Android keyboards (Gboard, Samsung Keyboard)
  * allow direct image/screenshot pasting from the keyboard clipboard.
  */
