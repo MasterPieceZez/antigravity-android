@@ -467,6 +467,27 @@ object AntigravityJsBridge {
                     if ((m = norm.match(/^(\d+)\s*(?:d|days?)\s+ago$/i))) {
                         return m[1] + ' روز پیش';
                     }
+                    if ((m = norm.match(/^Available AI credits:\s*(.+)$/i))) {
+                        return 'اعتبار هوش مصنوعی در دسترس: ' + m[1];
+                    }
+                    if ((m = norm.match(/^Choose\s+(.+?)'s\s+Voice$/i))) {
+                        return 'انتخاب صدای ' + m[1];
+                    }
+                    if ((m = norm.match(/^Powered by Gemini Live\s*·\s*(.+)$/i))) {
+                        return 'با قدرت Gemini Live · ' + m[1];
+                    }
+                    if ((m = norm.match(/^(Default|Auto|Turbo|Request Review)(?:\s+and\s+(Default|Auto|Turbo|Request Review))?\s+needs?\s+the\s+terminal\s+sandbox,\s+which\s+isn't\s+available\s+on\s+this\s+host\.$/i))) {
+                        var mapPreset = { 'default': 'پیش‌فرض', 'auto': 'خودکار', 'turbo': 'توربو', 'request review': 'درخواست بررسی' };
+                        var p1 = mapPreset[m[1].toLowerCase()] || m[1];
+                        if (m[2]) {
+                            var p2 = mapPreset[m[2].toLowerCase()] || m[2];
+                            return 'حالت‌های ' + p1 + ' و ' + p2 + ' نیازمند سندباکس ترمینال هستند که در این میزبان در دسترس نیست.';
+                        }
+                        return 'حالت ' + p1 + ' نیازمند سندباکس ترمینال است که در این میزبان در دسترس نیست.';
+                    }
+                    if ((m = norm.match(/^When toggled on,\s+(.+?)\s+will use your AI credits to fulfill model requests once you're out of model quota\./i))) {
+                        return 'در صورت فعال بودن، پس از پایان سهمیه مدل از اعتبار هوش مصنوعی برای پاسخگویی استفاده می‌شود. همیشه ابتدا سهمیه مدل مصرف می‌شود.';
+                    }
                     if ((m = norm.match(/^(\d+)\s*(?:w|wk|weeks?)\s+ago$/i))) {
                         return m[1] + ' هفته پیش';
                     }
@@ -657,10 +678,8 @@ object AntigravityJsBridge {
                             }
                             var fa = lookupPersian(norm);
                             if (!fa) continue;
-                            var leadMatch = raw.match(/^\s*/);
-                            var trailMatch = raw.match(/\s*$/);
-                            var lead = leadMatch ? leadMatch[0] : '';
-                            var trail = (trailMatch && lead.length < raw.length) ? trailMatch[0] : '';
+                            var lead = raw.match(/^\s*/)[0];
+                            var trail = raw.match(/\s*$/)[0];
                             var nextVal = lead + fa + trail;
                             var rec = st.origText.get(node);
                             if (!rec || raw !== rec.translated) {
