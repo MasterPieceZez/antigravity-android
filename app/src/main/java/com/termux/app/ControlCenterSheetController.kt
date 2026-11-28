@@ -39,6 +39,7 @@ class ControlCenterSheetController(
         fun onApplyCpuWakeLock(enabled: Boolean)
         fun onApplyBidiRtl(enabled: Boolean)
         fun onApplyPersianUi(enabled: Boolean)
+        fun onApplyFloatingPillMode(enabled: Boolean)
         fun onSendTestNotification()
         fun onAddAccount()
         fun onSwitchAccount(account: AccountProfile)
@@ -103,8 +104,10 @@ class ControlCenterSheetController(
 
         val switchBidiRtl = view.findViewById<Switch>(R.id.switch_bidi_rtl)
         val switchPersianUi = view.findViewById<Switch>(R.id.switch_persian_ui)
+        val switchFloatingPill = view.findViewById<Switch>(R.id.switch_floating_pill)
         switchBidiRtl.isChecked = AntigravityJsBridge.isBidiRtlEnabled(activity)
         switchPersianUi.isChecked = AntigravityJsBridge.isPersianUiEnabled(activity)
+        switchFloatingPill.isChecked = prefs.getBoolean("use_floating_pill", false)
 
         switchBidiRtl.setOnCheckedChangeListener { _, checked ->
             AntigravityJsBridge.setBidiRtlEnabled(activity, checked)
@@ -114,6 +117,10 @@ class ControlCenterSheetController(
             AntigravityJsBridge.setPersianUiEnabled(activity, checked)
             dialog.dismiss()
             callbacks.onApplyPersianUi(checked)
+        }
+        switchFloatingPill.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean("use_floating_pill", checked).apply()
+            callbacks.onApplyFloatingPillMode(checked)
         }
 
         val switchScreenOn = view.findViewById<Switch>(R.id.switch_keep_screen_on)

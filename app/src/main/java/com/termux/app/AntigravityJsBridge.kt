@@ -304,7 +304,17 @@ object AntigravityJsBridge {
                     var hasShadow = (cardCs.boxShadow && cardCs.boxShadow !== 'none');
                     var btnEl = document.querySelector('button[class*="bg-primary"], [class*="bg-primary"], button[class*="primary"], a[class*="primary"]');
                     var btnCs = btnEl ? getComputedStyle(btnEl) : cardCs;
-                    var accentColor = isOpaqueColor(btnCs.backgroundColor) ? btnCs.backgroundColor : '';
+                    var rawAccent = isOpaqueColor(btnCs.backgroundColor) ? btnCs.backgroundColor : '';
+                    var accentColor = '';
+                    if (rawAccent) {
+                        var rgbM = rawAccent.match(/\d+/g);
+                        if (rgbM && rgbM.length >= 3) {
+                            var r = +rgbM[0], g = +rgbM[1], b = +rgbM[2];
+                            if (Math.max(r, g, b) - Math.min(r, g, b) >= 35) {
+                                accentColor = rawAccent;
+                            }
+                        }
+                    }
                     var textPrimary = bodyCs.color || '';
                     var mutedEl = document.querySelector('[class*="text-muted"], [class*="muted"], [class*="secondary"], small');
                     var textSecondary = mutedEl ? getComputedStyle(mutedEl).color : textPrimary;
@@ -348,32 +358,44 @@ object AntigravityJsBridge {
                 lastHeaderMounted = mounted;
                 sendNative('header_controls_state', { mounted: mounted });
             }
-            function findHeaderSettingsBtn() {
-                var btn = document.querySelector('button[data-testid="mobile-open-settings"]');
-                if (btn && btn.offsetParent !== null) return btn;
-                var candidates = document.querySelectorAll('header button, [data-testid="mobile-search-conversations"] ~ button, button[aria-label="Settings"], button[aria-label="تنظیمات"]');
+            function findHeaderActionButton() {
+                var directSelectors = [
+                    'button[data-testid="mobile-open-settings"]',
+                    'button[data-testid="mobile-toggle-aux-sidebar"]',
+                    'button[data-testid="mobile-search-conversations"]'
+                ];
+                for (var s = 0; s < directSelectors.length; s++) {
+                    var direct = document.querySelector(directSelectors[s]);
+                    if (direct && direct.offsetParent !== null && direct.parentNode) {
+                        return direct;
+                    }
+                }
+                var candidates = document.querySelectorAll('header button, button[aria-label="Settings"], button[aria-label="تنظیمات"], button[aria-label="Toggle Side Panel"]');
                 for (var i = 0; i < candidates.length; i++) {
                     var c = candidates[i];
-                    if (c.id === 'agy-header-controls-btn' || c.offsetParent === null) continue;
+                    if (c.id === 'agy-header-controls-btn' || c.offsetParent === null || !c.parentNode) continue;
                     var r = c.getBoundingClientRect();
-                    if (r.top >= 0 && r.top <= 120 && r.width > 0 && r.height > 0) {
-                        var lbl = (c.getAttribute('aria-label') || c.getAttribute('title') || '').trim().toLowerCase();
-                        if (lbl === 'settings' || lbl === 'تنظیمات' || c.getAttribute('data-testid') === 'mobile-open-settings') {
-                            return c;
-                        }
+                    if (r.top >= 0 && r.top <= 120 && r.left > (window.innerWidth * 0.45) && r.width > 0 && r.height > 0) {
+                        return c;
                     }
                 }
                 return null;
             }
             function ensureHeaderControlsButton() {
                 try {
-                    var settingsBtn = findHeaderSettingsBtn();
                     var existing = document.getElementById('agy-header-controls-btn');
-                    if (!settingsBtn || !settingsBtn.parentNode) {
+                    if (window.__agyUseFloatingPill) {
                         if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
                         reportHeaderMounted(false);
                         return;
                     }
+                    var refBtn = findHeaderActionButton();
+                    if (!refBtn || !refBtn.parentNode) {
+                        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+                        reportHeaderMounted(false);
+                        return;
+                    }
+                    var container = refBtn.parentNode;
                     var fa = isFaUi();
                     var aria = fa ? 'مرکز کنترل' : 'Control Center';
                     var title = fa ? 'مرکز کنترل آنتی‌گرویتی' : 'Antigravity Control Center';
@@ -384,9 +406,9 @@ object AntigravityJsBridge {
                         btn.setAttribute('data-testid', 'agy-header-controls');
                         btn.setAttribute('aria-label', aria);
                         btn.setAttribute('title', title);
-                        btn.className = settingsBtn.className || '';
+                        btn.className = refBtn.className || '';
                         btn.style.webkitAppRegion = 'no-drag';
-                        var refSvg = settingsBtn.querySelector('svg');
+                        var refSvg = refBtn.querySelector('svg');
                         var svgW = (refSvg && refSvg.getAttribute('width')) || '20';
                         var svgH = (refSvg && refSvg.getAttribute('height')) || '20';
                         var svgCls = (refSvg && refSvg.getAttribute('class')) || '';
@@ -399,13 +421,13 @@ object AntigravityJsBridge {
                             e.stopPropagation();
                             sendNative('open_controls', {});
                         });
-                        settingsBtn.parentNode.insertBefore(btn, settingsBtn.nextSibling);
+                        container.appendChild(btn);
                     } else {
-                        if (existing.className !== (settingsBtn.className || '')) {
-                            existing.className = settingsBtn.className || '';
+                        if (existing.className !== (refBtn.className || '')) {
+                            existing.className = refBtn.className || '';
                         }
-                        if (existing.previousSibling !== settingsBtn) {
-                            settingsBtn.parentNode.insertBefore(existing, settingsBtn.nextSibling);
+                        if (existing.parentNode !== container || container.lastElementChild !== existing) {
+                            container.appendChild(existing);
                         }
                         existing.setAttribute('aria-label', aria);
                         existing.setAttribute('title', title);
@@ -681,11 +703,12 @@ object AntigravityJsBridge {
                         }
                         return;
                     }
-                    var micRow = (micCtrl && micCtrl.parentElement) || (micLabel && micLabel.closest('[class*="justify-between"]'));
+                    var micRow = (micLabel && micLabel.closest('[class*="justify-between"]')) ||
+                        (micCtrl && micCtrl.closest('[class*="justify-between"]'));
                     if (!micRow || !micRow.parentNode) return;
                     var existing = document.getElementById('agy-mic-tester-card');
                     if (existing) {
-                        if (existing.previousSibling !== micRow) {
+                        if (existing.parentNode !== micRow.parentNode || existing.previousSibling !== micRow) {
                             micRow.parentNode.insertBefore(existing, micRow.nextSibling);
                         }
                         updateMicTesterUi();
@@ -693,19 +716,19 @@ object AntigravityJsBridge {
                     }
                     var card = document.createElement('div');
                     card.id = 'agy-mic-tester-card';
-                    card.className = 'mx-3 my-1.5 px-3 py-2.5 rounded-lg border text-sm';
-                    card.style.cssText = 'background:var(--secondary,rgba(128,128,128,0.08));border-color:var(--border,rgba(128,128,128,0.24));';
+                    card.className = 'rounded-lg border text-sm';
+                    card.style.cssText = 'box-sizing:border-box;width:auto;max-width:100%;margin:6px 12px 10px 12px;padding:10px 12px;background:var(--secondary,rgba(128,128,128,0.08));border-color:var(--border,rgba(128,128,128,0.24));';
                     card.innerHTML =
-                        '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">' +
+                        '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap;">' +
                             '<span id="agy-mic-tester-title" style="font-weight:600;font-size:13px;">Test Mic</span>' +
                             '<span id="agy-mic-tester-status" style="font-size:11.5px;opacity:0.75;">Ready</span>' +
                         '</div>' +
                         '<div style="height:6px;width:100%;border-radius:999px;background:rgba(128,128,128,0.24);overflow:hidden;margin-bottom:9px;">' +
                             '<div id="agy-mic-meter-fill" style="height:100%;width:0%;border-radius:999px;background:var(--primary,#3B82F6);transition:width 60ms linear;"></div>' +
                         '</div>' +
-                        '<div style="display:flex;align-items:center;gap:8px;">' +
-                            '<button id="agy-mic-live-btn" type="button" class="px-2.5 py-1 rounded-md border text-xs font-medium bg-background hover:bg-muted transition-colors" style="border-color:var(--border,rgba(128,128,128,0.3));cursor:pointer;">Live Meter</button>' +
-                            '<button id="agy-mic-rec-btn" type="button" class="px-2.5 py-1 rounded-md border text-xs font-medium bg-background hover:bg-muted transition-colors" style="border-color:var(--border,rgba(128,128,128,0.3));cursor:pointer;">Record & Play</button>' +
+                        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                            '<button id="agy-mic-live-btn" type="button" class="px-2.5 py-1.5 rounded-md border text-xs font-medium bg-background hover:bg-muted transition-colors" style="border-color:var(--border,rgba(128,128,128,0.3));cursor:pointer;">Live Meter</button>' +
+                            '<button id="agy-mic-rec-btn" type="button" class="px-2.5 py-1.5 rounded-md border text-xs font-medium bg-background hover:bg-muted transition-colors" style="border-color:var(--border,rgba(128,128,128,0.3));cursor:pointer;">Record & Play</button>' +
                         '</div>';
                     micRow.parentNode.insertBefore(card, micRow.nextSibling);
                     var liveBtn = document.getElementById('agy-mic-live-btn');
@@ -725,79 +748,154 @@ object AntigravityJsBridge {
                 });
             }
 
+            function replaceBtnIconAndLabel(btn, labelTxt, labelAttr) {
+                var svg = btn.querySelector('svg');
+                if (svg) {
+                    var svgCls = svg.getAttribute('class') || '';
+                    var svgW = svg.getAttribute('width') || '16';
+                    var svgH = svg.getAttribute('height') || '16';
+                    var newSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                    newSvg.setAttribute('viewBox', '0 0 24 24');
+                    newSvg.setAttribute('width', svgW);
+                    newSvg.setAttribute('height', svgH);
+                    newSvg.setAttribute('fill', 'currentColor');
+                    newSvg.setAttribute('aria-hidden', 'true');
+                    if (svgCls) newSvg.setAttribute('class', svgCls);
+                    newSvg.innerHTML = '<path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>';
+                    svg.parentNode.replaceChild(newSvg, svg);
+                }
+                var walker = document.createTreeWalker(btn, NodeFilter.SHOW_TEXT, null);
+                var tn;
+                var replacedLabel = false;
+                while ((tn = walker.nextNode())) {
+                    if (tn.nodeValue && tn.nodeValue.trim().length > 0) {
+                        tn.nodeValue = labelTxt;
+                        if (tn.parentElement) tn.parentElement.setAttribute(labelAttr, '1');
+                        replacedLabel = true;
+                        break;
+                    }
+                }
+                if (!replacedLabel) {
+                    var span = document.createElement('span');
+                    span.setAttribute(labelAttr, '1');
+                    span.textContent = labelTxt;
+                    btn.appendChild(span);
+                }
+            }
             function ensureGalleryAttachMenuItem() {
                 try {
-                    var uploadInput = document.querySelector('input[data-testid="upload-project-files-input"]');
-                    if (!uploadInput || !uploadInput.parentElement || !uploadInput.parentElement.parentNode) return;
-                    var wrapper = uploadInput.parentElement;
-                    var uploadBtn = wrapper.querySelector('button, [role="button"]');
-                    if (!uploadBtn) return;
                     var fa = isFaUi();
                     var labelTxt = fa ? 'گالری و تصاویر' : 'Photos & Gallery';
-                    var existingWrap = document.getElementById('agy-upload-gallery-wrap');
-                    if (existingWrap) {
-                        var existingLabel = existingWrap.querySelector('[data-agy-gallery-label="1"]');
-                        if (existingLabel && existingLabel.textContent !== labelTxt) {
-                            existingLabel.textContent = labelTxt;
-                        }
-                        if (existingWrap.previousSibling !== wrapper) {
-                            wrapper.parentNode.insertBefore(existingWrap, wrapper.nextSibling);
-                        }
-                        return;
-                    }
-                    var galleryWrap = document.createElement('div');
-                    galleryWrap.id = 'agy-upload-gallery-wrap';
-                    galleryWrap.className = wrapper.className || 'relative';
-                    var btn = uploadBtn.cloneNode(true);
-                    btn.id = 'agy-upload-gallery-btn';
-                    btn.setAttribute('type', 'button');
-                    btn.setAttribute('data-testid', 'agy-upload-gallery-button');
-                    var svg = btn.querySelector('svg');
-                    if (svg) {
-                        var svgCls = svg.getAttribute('class') || '';
-                        var svgW = svg.getAttribute('width') || '16';
-                        var svgH = svg.getAttribute('height') || '16';
-                        var newSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                        newSvg.setAttribute('viewBox', '0 0 24 24');
-                        newSvg.setAttribute('width', svgW);
-                        newSvg.setAttribute('height', svgH);
-                        newSvg.setAttribute('fill', 'currentColor');
-                        newSvg.setAttribute('aria-hidden', 'true');
-                        if (svgCls) newSvg.setAttribute('class', svgCls);
-                        newSvg.innerHTML = '<path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>';
-                        svg.parentNode.replaceChild(newSvg, svg);
-                    }
-                    var walker = document.createTreeWalker(btn, NodeFilter.SHOW_TEXT, null);
-                    var tn;
-                    var replacedLabel = false;
-                    while ((tn = walker.nextNode())) {
-                        if (tn.nodeValue && tn.nodeValue.trim().length > 0) {
-                            tn.nodeValue = labelTxt;
-                            if (tn.parentElement) tn.parentElement.setAttribute('data-agy-gallery-label', '1');
-                            replacedLabel = true;
-                            break;
+
+                    // 1. Project / desktop "Upload Files" menu
+                    var uploadInput = document.querySelector('input[data-testid="upload-project-files-input"]');
+                    if (uploadInput && uploadInput.parentElement && uploadInput.parentElement.parentNode) {
+                        var wrapper = uploadInput.parentElement;
+                        var uploadBtn = wrapper.querySelector('button, [role="button"]');
+                        if (uploadBtn) {
+                            var existingWrap = document.getElementById('agy-upload-gallery-wrap');
+                            if (existingWrap) {
+                                var existingLabel = existingWrap.querySelector('[data-agy-gallery-label="1"]');
+                                if (existingLabel && existingLabel.textContent !== labelTxt) existingLabel.textContent = labelTxt;
+                                if (existingWrap.previousSibling !== wrapper) wrapper.parentNode.insertBefore(existingWrap, wrapper.nextSibling);
+                            } else {
+                                var galleryWrap = document.createElement('div');
+                                galleryWrap.id = 'agy-upload-gallery-wrap';
+                                galleryWrap.className = wrapper.className || 'relative';
+                                var pBtn = uploadBtn.cloneNode(true);
+                                pBtn.id = 'agy-upload-gallery-btn';
+                                pBtn.setAttribute('type', 'button');
+                                pBtn.setAttribute('data-testid', 'agy-upload-gallery-button');
+                                replaceBtnIconAndLabel(pBtn, labelTxt, 'data-agy-gallery-label');
+                                pBtn.addEventListener('click', function(e) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    try {
+                                        uploadInput.setAttribute('accept', 'image/*');
+                                        uploadInput.click();
+                                    } finally {
+                                        setTimeout(function() {
+                                            try { uploadInput.removeAttribute('accept'); } catch (err) {}
+                                        }, 300);
+                                    }
+                                });
+                                galleryWrap.appendChild(pBtn);
+                                wrapper.parentNode.insertBefore(galleryWrap, wrapper.nextSibling);
+                            }
                         }
                     }
-                    if (!replacedLabel) {
-                        var span = document.createElement('span');
-                        span.setAttribute('data-agy-gallery-label', '1');
-                        span.textContent = labelTxt;
-                        btn.appendChild(span);
-                    }
-                    btn.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        try {
-                            uploadInput.setAttribute('accept', 'image/*');
-                            uploadInput.click();
-                        } finally {
-                            setTimeout(function() {
-                                try { uploadInput.removeAttribute('accept'); } catch (err) {}
-                            }, 300);
+
+                    // 2. Mobile "+" ("Add Context" / "افزودن زمینه") bottom sheet or popover menu
+                    var sheets = [];
+                    var candidates = document.querySelectorAll('div, span, p, h1, h2, h3, [role="heading"]');
+                    for (var h = 0; h < candidates.length; h++) {
+                        var hdr = candidates[h];
+                        if (!hdr || hdr.offsetParent === null || hdr.childElementCount > 1) continue;
+                        var hTxt = (hdr.textContent || '').replace(/\s+/g, ' ').trim();
+                        if (hTxt === 'Add Context' || hTxt === 'Add context' || hTxt === 'افزودن زمینه') {
+                            var container = hdr.parentElement;
+                            for (var up = 0; up < 3 && container; up++) {
+                                if (container.querySelectorAll('svg').length >= 3) break;
+                                container = container.parentElement;
+                            }
+                            if (container) sheets.push(container);
                         }
-                    });
-                    galleryWrap.appendChild(btn);
-                    wrapper.parentNode.insertBefore(galleryWrap, wrapper.nextSibling);
+                    }
+                    for (var i = 0; i < sheets.length; i++) {
+                        var sheet = sheets[i];
+                        if (!sheet || sheet.offsetParent === null) continue;
+                        var items = sheet.querySelectorAll('button, [role="menuitem"], [role="button"], div, a');
+                        var filesBtn = null;
+                        for (var j = 0; j < items.length; j++) {
+                            var it = items[j];
+                            if (it.id === 'agy-mobile-gallery-btn' || it.id === 'agy-upload-gallery-btn') continue;
+                            var itTxt = (it.textContent || '').replace(/\s+/g, ' ').trim();
+                            if ((itTxt === 'Files' || itTxt === 'فایل‌ها') && it.querySelector('svg')) {
+                                if (it.matches && it.matches('button, [role="menuitem"], [role="button"]')) {
+                                    filesBtn = it;
+                                    break;
+                                }
+                                if (!filesBtn) filesBtn = it;
+                            }
+                        }
+                        if (!filesBtn || !filesBtn.parentNode) continue;
+                        var existingMob = document.getElementById('agy-mobile-gallery-btn');
+                        if (existingMob) {
+                            var mobLbl = existingMob.querySelector('[data-agy-mobile-gallery-label="1"]');
+                            if (mobLbl && mobLbl.textContent !== labelTxt) mobLbl.textContent = labelTxt;
+                            if (existingMob.parentNode !== filesBtn.parentNode || existingMob.previousSibling !== filesBtn) {
+                                filesBtn.parentNode.insertBefore(existingMob, filesBtn.nextSibling);
+                            }
+                        } else {
+                            var mBtn = filesBtn.cloneNode(true);
+                            mBtn.id = 'agy-mobile-gallery-btn';
+                            mBtn.setAttribute('data-testid', 'agy-mobile-gallery-button');
+                            replaceBtnIconAndLabel(mBtn, labelTxt, 'data-agy-mobile-gallery-label');
+                            mBtn.addEventListener('click', function(e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                var fileInputs = document.querySelectorAll('input[type="file"]');
+                                var prevAccepts = [];
+                                for (var k = 0; k < fileInputs.length; k++) {
+                                    prevAccepts.push(fileInputs[k].getAttribute('accept'));
+                                    fileInputs[k].setAttribute('accept', 'image/*');
+                                }
+                                try {
+                                    filesBtn.click();
+                                } finally {
+                                    setTimeout(function() {
+                                        for (var k = 0; k < fileInputs.length; k++) {
+                                            try {
+                                                if (prevAccepts[k] === null) fileInputs[k].removeAttribute('accept');
+                                                else fileInputs[k].setAttribute('accept', prevAccepts[k]);
+                                            } catch (err) {}
+                                        }
+                                    }, 350);
+                                }
+                            });
+                            filesBtn.parentNode.insertBefore(mBtn, filesBtn.nextSibling);
+                        }
+                    }
                 } catch (e) {}
             }
 
@@ -808,6 +906,7 @@ object AntigravityJsBridge {
                 ensureMicTesterCard();
                 ensureGalleryAttachMenuItem();
             }
+            window.__agyRunUiInjections = runUiInjections;
             function scheduleUiInjections() {
                 if (uiInjectScheduled) return;
                 uiInjectScheduled = true;
@@ -906,10 +1005,10 @@ object AntigravityJsBridge {
                     var active = document.activeElement;
                     var target = null;
                     if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
-                        target = active;
+                        target = active.closest ? (active.closest('[contenteditable="true"]') || active) : active;
                     }
                     if (!target) {
-                        target = document.querySelector('textarea[placeholder], [contenteditable="true"][role="textbox"], [contenteditable="true"], textarea');
+                        target = document.querySelector('[contenteditable="true"][role="textbox"], textarea[placeholder], [contenteditable="true"], textarea');
                     }
                     if (!target) return;
                     try { target.focus(); } catch (e) {}

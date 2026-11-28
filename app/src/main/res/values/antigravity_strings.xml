@@ -26,6 +26,7 @@
     <string name="agy_section_language_bidi">Language &amp; BiDi / فارسی</string>
     <string name="agy_switch_smart_bidi">Smart BiDi / RTL</string>
     <string name="agy_switch_persian_ui">Persian UI (فارسی)</string>
+    <string name="agy_switch_floating_pill">Use floating pillbox instead of top-bar button</string>
 
     <string name="agy_section_quick_actions">Quick Actions</string>
     <string name="agy_btn_reload_ui">Reload UI</string>

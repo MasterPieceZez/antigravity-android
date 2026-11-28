@@ -271,7 +271,12 @@ data class HubThemeSnapshot(
 
             val card = parseCssColor(json.optString("cardBg")) ?: defaultCard
             val border = parseCssColor(json.optString("borderColor")) ?: defaultBorder
-            val accent = parseCssColor(json.optString("accentColor")) ?: Color.parseColor("#4F8CFF")
+            val rawAccent = parseCssColor(json.optString("accentColor"))
+            val accent = if (rawAccent != null && isUsableAccent(rawAccent, surface, card)) {
+                rawAccent
+            } else {
+                Color.parseColor("#3B82F6")
+            }
             val rawTextPri = parseCssColor(json.optString("textPrimary"))
             val textPri = if (rawTextPri != null && isColorDark(rawTextPri) != dark) rawTextPri else defaultTextPri
             val rawTextSec = parseCssColor(json.optString("textSecondary"))
@@ -291,6 +296,15 @@ data class HubThemeSnapshot(
                 textSecondary = textSec,
                 isDark = dark
             )
+        }
+
+        private fun isUsableAccent(color: Int, surfaceBg: Int, cardBg: Int): Boolean {
+            val r = Color.red(color)
+            val g = Color.green(color)
+            val b = Color.blue(color)
+            val chroma = maxOf(r, g, b) - minOf(r, g, b)
+            if (chroma < 35) return false
+            return colorDistance(color, surfaceBg) >= 75 && colorDistance(color, cardBg) >= 60
         }
 
         private fun blendColors(base: Int, tint: Int, tintRatio: Float): Int {

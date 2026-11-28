@@ -223,6 +223,16 @@
                 android:text="@string/agy_switch_persian_ui"
                 android:textColor="@color/agy_text_primary"
                 android:textSize="13sp" />
+
+            <Switch
+                android:id="@+id/switch_floating_pill"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:checked="false"
+                android:text="@string/agy_switch_floating_pill"
+                android:textColor="@color/agy_text_primary"
+                android:textSize="13sp" />
         </LinearLayout>
 
         <!-- Quick Actions -->

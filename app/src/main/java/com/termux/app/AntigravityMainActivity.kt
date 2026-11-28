@@ -93,6 +93,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         private const val KEY_CPU_WAKELOCK = "cpu_wakelock"
         private const val KEY_SETUP_DISMISSED = "setup_dismissed"
+        private const val KEY_USE_FLOATING_PILL = "use_floating_pill"
         private const val STATE_TERMINAL_VISIBLE = "state_terminal_visible"
         private const val MAX_LOCAL_DOWNLOAD_BYTES = 250L * 1024L * 1024L
         private const val MAX_PASTED_IMAGE_BYTES = 15L * 1024L * 1024L
@@ -170,6 +171,8 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private var isActivityForeground = true
     private var isHeaderControlsMounted = false
     private var hasCheckedLaunchUpdates = false
+    @Volatile
+    private var currentTrustedHubUrl: String? = null
 
     private var pendingWebPermissionRequest: PermissionRequest? = null
     private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
@@ -512,8 +515,12 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
         AntigravityNotifier.showAgentDoneNotification(this, title, body, force)
     }
 
+    private fun isFloatingPillModeEnabled(): Boolean =
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_USE_FLOATING_PILL, false)
+
     private fun injectAgentNotificationBridge() {
-        webView.evaluateJavascript(AntigravityJsBridge.AGENT_BRIDGE_JS, null)
+        val pillFlagJs = "window.__agyUseFloatingPill = ${isFloatingPillModeEnabled()};\n"
+        webView.evaluateJavascript(pillFlagJs + AntigravityJsBridge.AGENT_BRIDGE_JS, null)
     }
 
     private fun registerDocumentStartPersianBidiScript() {
@@ -920,9 +927,15 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                 return true
             }
 
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                currentTrustedHubUrl = if (AntigravityFileHelper.isTrustedHubUri(url)) url else null
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 if (AntigravityFileHelper.isTrustedHubUri(url)) {
+                    currentTrustedHubUrl = url
                     reconnectBanner.visibility = View.GONE
                     injectAgentNotificationBridge()
                     injectPersianBidiBridge(url)
@@ -1078,11 +1091,19 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     }
 
     private fun registerWebViewReceiveContentListener() {
+        (webView as? AntigravityWebView)?.onImeImageCommitted = { uri, mimeType, releasePermission ->
+            handlePastedImageUri(uri, mimeType, releasePermission)
+        }
         ViewCompat.setOnReceiveContentListener(
             webView,
             arrayOf("image/*", "image/png", "image/jpeg", "image/webp", "image/gif")
         ) { _, payload ->
-            if (!AntigravityFileHelper.isTrustedHubUri(webView.url)) {
+            val trustedUrl = currentTrustedHubUrl ?: if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                webView.url
+            } else {
+                null
+            }
+            if (!AntigravityFileHelper.isTrustedHubUri(trustedUrl)) {
                 return@setOnReceiveContentListener payload
             }
             val (imageContent, remaining) = payload.partition { item ->
@@ -1102,80 +1123,104 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
             if (uris.isEmpty()) return@setOnReceiveContentListener payload
 
             for (uri in uris) {
-                lifecycleScope.launch(Dispatchers.IO) {
-                    val resolvedMime = runCatching { contentResolver.getType(uri) }.getOrNull()
-                        ?.takeIf { it.startsWith("image/", ignoreCase = true) }
-                        ?: "image/png"
-                    var displayName: String? = null
-                    runCatching {
-                        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-                            if (c.moveToFirst()) displayName = c.getString(0)
-                        }
-                    }
-                    val fallbackExt = when (resolvedMime.lowercase(Locale.US)) {
-                        "image/jpeg", "image/jpg" -> "jpg"
-                        "image/webp" -> "webp"
-                        "image/gif" -> "gif"
-                        else -> "png"
-                    }
-                    val safeName = AntigravityFileHelper.sanitizeFileName(
-                        displayName ?: "pasted_image_${System.currentTimeMillis()}.$fallbackExt",
-                        "pasted_image"
-                    )
-                    var tooLarge = false
-                    val bytes = runCatching {
-                        contentResolver.openInputStream(uri)?.use { input ->
-                            val out = ByteArrayOutputStream()
-                            val buf = ByteArray(32 * 1024)
-                            var total = 0L
-                            while (true) {
-                                val n = input.read(buf)
-                                if (n <= 0) break
-                                total += n
-                                if (total > MAX_PASTED_IMAGE_BYTES) {
-                                    tooLarge = true
-                                    return@use null
-                                }
-                                out.write(buf, 0, n)
-                            }
-                            out.toByteArray()
-                        }
-                    }.getOrNull()
-                    withContext(Dispatchers.Main) {
-                        if (isFinishing || isDestroyed) return@withContext
-                        if (tooLarge) {
-                            Toast.makeText(
-                                this@AntigravityMainActivity,
-                                getString(R.string.agy_toast_pasted_image_too_large),
-                                Toast.LENGTH_SHORT
-                            ).show()
-                            return@withContext
-                        }
-                        if (bytes == null || bytes.isEmpty()) {
-                            Toast.makeText(
-                                this@AntigravityMainActivity,
-                                getString(R.string.agy_toast_pasted_image_failed),
-                                Toast.LENGTH_SHORT
-                            ).show()
-                            return@withContext
-                        }
-                        if (AntigravityFileHelper.isTrustedHubUri(webView.url)) {
-                            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                            webView.evaluateJavascript(
-                                AntigravityJsBridge.buildPasteImageJs(safeName, resolvedMime, b64),
-                                null
-                            )
-                        }
-                    }
-                }
+                handlePastedImageUri(uri, null, null)
             }
             remaining
         }
     }
 
+    private fun handlePastedImageUri(
+        uri: Uri,
+        hintMime: String?,
+        releasePermission: (() -> Unit)?
+    ) {
+        val trustedSnapshot = currentTrustedHubUrl
+        if (!AntigravityFileHelper.isTrustedHubUri(trustedSnapshot)) {
+            releasePermission?.invoke()
+            return
+        }
+        lifecycleScope.launch(Dispatchers.IO) {
+            var tooLarge = false
+            var resolvedMime = hintMime?.takeIf { it.startsWith("image/", ignoreCase = true) }
+            var safeName = "pasted_image.png"
+            val bytes = try {
+                if (resolvedMime == null) {
+                    resolvedMime = runCatching { contentResolver.getType(uri) }.getOrNull()
+                        ?.takeIf { it.startsWith("image/", ignoreCase = true) }
+                }
+                val finalMime = resolvedMime ?: "image/png"
+                resolvedMime = finalMime
+                var displayName: String? = null
+                runCatching {
+                    contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                        if (c.moveToFirst()) displayName = c.getString(0)
+                    }
+                }
+                val fallbackExt = when (finalMime.lowercase(Locale.US)) {
+                    "image/jpeg", "image/jpg" -> "jpg"
+                    "image/webp" -> "webp"
+                    "image/gif" -> "gif"
+                    else -> "png"
+                }
+                safeName = AntigravityFileHelper.sanitizeFileName(
+                    displayName ?: "pasted_image_${System.currentTimeMillis()}.$fallbackExt",
+                    "pasted_image"
+                )
+                runCatching {
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        val out = ByteArrayOutputStream()
+                        val buf = ByteArray(32 * 1024)
+                        var total = 0L
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n <= 0) break
+                            total += n
+                            if (total > MAX_PASTED_IMAGE_BYTES) {
+                                tooLarge = true
+                                return@use null
+                            }
+                            out.write(buf, 0, n)
+                        }
+                        out.toByteArray()
+                    }
+                }.getOrNull()
+            } finally {
+                releasePermission?.invoke()
+            }
+            val finalMime = resolvedMime ?: "image/png"
+            withContext(Dispatchers.Main) {
+                if (isFinishing || isDestroyed) return@withContext
+                if (tooLarge) {
+                    Toast.makeText(
+                        this@AntigravityMainActivity,
+                        getString(R.string.agy_toast_pasted_image_too_large),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@withContext
+                }
+                if (bytes == null || bytes.isEmpty()) {
+                    Toast.makeText(
+                        this@AntigravityMainActivity,
+                        getString(R.string.agy_toast_pasted_image_failed),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@withContext
+                }
+                if (AntigravityFileHelper.isTrustedHubUri(webView.url)) {
+                    val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    webView.evaluateJavascript(
+                        AntigravityJsBridge.buildPasteImageJs(safeName, finalMime, b64),
+                        null
+                    )
+                }
+            }
+        }
+    }
+
     private fun updateHeaderControlsMounted(mounted: Boolean) {
         isHeaderControlsMounted = mounted
-        if (mounted) {
+        val forcePill = isFloatingPillModeEnabled()
+        if (mounted && !forcePill) {
             pillController.setVisible(false)
         } else if (!terminalController.isVisible() &&
             (webView.visibility == View.VISIBLE || splashContainer.visibility == View.VISIBLE)
@@ -1231,6 +1276,15 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
                     if (AppCompatDelegate.getApplicationLocales() != targetLocales) {
                         AppCompatDelegate.setApplicationLocales(targetLocales)
                     }
+                }
+                override fun onApplyFloatingPillMode(enabled: Boolean) {
+                    if (AntigravityFileHelper.isTrustedHubUri(currentTrustedHubUrl ?: webView.url)) {
+                        webView.evaluateJavascript(
+                            "window.__agyUseFloatingPill = $enabled; if (window.__agyRunUiInjections) window.__agyRunUiInjections();",
+                            null
+                        )
+                    }
+                    updateHeaderControlsMounted(if (enabled) false else isHeaderControlsMounted)
                 }
                 override fun onSendTestNotification() {
                     showAgentDoneNotification(
@@ -1771,7 +1825,7 @@ class AntigravityMainActivity : AppCompatActivity(), ServiceConnection {
     private fun hideTerminalView() {
         terminalController.hide()
         if (webView.visibility == View.VISIBLE) {
-            pillController.setVisible(!isHeaderControlsMounted)
+            pillController.setVisible(isFloatingPillModeEnabled() || !isHeaderControlsMounted)
         } else if (AntigravityEngine.isAgyInstalled()) {
             bootAntigravityHub()
         } else {

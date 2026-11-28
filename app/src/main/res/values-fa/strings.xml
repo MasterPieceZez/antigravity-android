@@ -82,6 +82,7 @@
     <string name="agy_section_language_bidi">زبان و جهت متن / فارسی</string>
     <string name="agy_switch_smart_bidi">هوشمند راست‌به‌چپ (Smart BiDi / RTL)</string>
     <string name="agy_switch_persian_ui">رابط کاربری فارسی (Persian UI)</string>
+    <string name="agy_switch_floating_pill">نمایش کپسول شناور به‌جای دکمه نوار بالا</string>
 
     <string name="agy_section_quick_actions">اقدامات سریع</string>
     <string name="agy_btn_reload_ui">بارگذاری مجدد</string>
