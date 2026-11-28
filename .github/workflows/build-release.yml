@@ -223,7 +223,21 @@ jobs:
             exit 1
           fi
           cd dist
-          cat > release_notes.md <<'EOF'
+          PRERELEASE_FLAG=""
+          TITLE="$TAG"
+          if [[ "$EXPECTED_VER" == *-* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+            TITLE="$TAG (Super Unstable Beta)"
+          fi
+          : > release_notes.md
+          if [[ "$EXPECTED_VER" == *-* ]]; then
+            cat >> release_notes.md <<'EOF'
+          > [!WARNING]
+          > **SUPER UNSTABLE BETA (__TAG__):** This pre-release build is experimental and may contain bugs or breaking issues. Use for testing only and create a Full Backup in Control Center before updating.
+
+          EOF
+          fi
+          cat >> release_notes.md <<'EOF'
           ## Antigravity for Android (__TAG__)
 
           Standalone 64-bit Android build for Google Antigravity (`arm64-v8a`, `x86_64`, and `universal`).
@@ -239,8 +253,8 @@ jobs:
           echo '```' >> release_notes.md
 
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file release_notes.md
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TITLE" --notes-file release_notes.md $PRERELEASE_FLAG
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" *.apk SHA256SUMS.txt --clobber
           else
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" *.apk SHA256SUMS.txt --title "$TAG" --notes-file release_notes.md
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" *.apk SHA256SUMS.txt --title "$TITLE" --notes-file release_notes.md $PRERELEASE_FLAG
           fi
